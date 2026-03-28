@@ -150,27 +150,49 @@ pub fn main() !void {
 
         const chat_h = chat_win.height;
 
-        // Pre-compute all wrapped lines to enable proper scrolling
+        // Pre-compute all lines for scrolling
+        const LineEntry = union(enum) {
+            plain: struct { text: []const u8, prefix: []const u8, is_first: bool },
+            styled: agent.markdown.StyledLine,
+        };
         const max_total_lines = 2048;
-        var all_lines: [max_total_lines]struct { text: []const u8, prefix: []const u8, role: App.Role, is_first: bool } = undefined;
+        var all_lines: [max_total_lines]LineEntry = undefined;
         var total_lines: usize = 0;
 
-        for (app.messages.items) |msg| {
-            const prefix = if (msg.role == .user) "You: " else "AI: ";
-            const prefix_len = @as(u16, @intCast(prefix.len));
-            const wrap_w = if (chat_win.width > prefix_len + 3) chat_win.width - prefix_len - 3 else 10;
-            const wrapped = ui.wrapText(msg.content, wrap_w, 512);
-
-            for (wrapped, 0..) |maybe_line, li| {
-                const line = maybe_line orelse break;
-                if (total_lines >= max_total_lines) break;
-                all_lines[total_lines] = .{
-                    .text = line,
-                    .prefix = prefix,
-                    .role = msg.role,
-                    .is_first = li == 0,
-                };
-                total_lines += 1;
+        for (app.messages.items) |*msg| {
+            if (msg.role == .assistant) {
+                // AI label
+                if (total_lines < max_total_lines) {
+                    all_lines[total_lines] = .{ .plain = .{
+                        .text = "",
+                        .prefix = "AI: ",
+                        .is_first = true,
+                    } };
+                    total_lines += 1;
+                }
+                // Styled markdown lines
+                const styled = app.getStyledLines(msg) catch &.{};
+                for (styled) |sline| {
+                    if (total_lines >= max_total_lines) break;
+                    all_lines[total_lines] = .{ .styled = sline };
+                    total_lines += 1;
+                }
+            } else {
+                // User messages — plain text
+                const prefix = "You: ";
+                const prefix_len = @as(u16, @intCast(prefix.len));
+                const user_wrap_w = if (chat_win.width > prefix_len + 3) chat_win.width - prefix_len - 3 else 10;
+                const wrapped = ui.wrapText(msg.content, user_wrap_w, 512);
+                for (wrapped, 0..) |maybe_line, li| {
+                    const line = maybe_line orelse break;
+                    if (total_lines >= max_total_lines) break;
+                    all_lines[total_lines] = .{ .plain = .{
+                        .text = line,
+                        .prefix = prefix,
+                        .is_first = li == 0,
+                    } };
+                    total_lines += 1;
+                }
             }
         }
 
@@ -180,21 +202,51 @@ pub fn main() !void {
             scroll_offset = max_scroll;
         } else if (scroll_offset >= max_scroll) {
             scroll_offset = max_scroll;
-            auto_scroll = true; // Re-enable when user scrolls to bottom
+            auto_scroll = true;
         }
 
         var row: u16 = 0;
         const start = if (scroll_offset < total_lines) scroll_offset else 0;
         for (all_lines[start..total_lines]) |entry| {
             if (row >= chat_h) break;
-            if (entry.is_first) {
-                _ = chat_win.printSegment(.{
-                    .text = entry.prefix,
-                    .style = .{ .fg = .{ .rgb = if (entry.role == .user) .{ 0x60, 0xD0, 0x60 } else .{ 0x60, 0xA0, 0xF0 } }, .bold = true },
-                }, .{ .row_offset = row, .col_offset = 1 });
+            switch (entry) {
+                .plain => |p| {
+                    if (p.is_first) {
+                        const color: [3]u8 = if (std.mem.eql(u8, p.prefix, "AI: ")) .{ 0x60, 0xA0, 0xF0 } else .{ 0x60, 0xD0, 0x60 };
+                        _ = chat_win.printSegment(.{
+                            .text = p.prefix,
+                            .style = .{ .fg = .{ .rgb = color }, .bold = true },
+                        }, .{ .row_offset = row, .col_offset = 1 });
+                    }
+                    const prefix_len = @as(u16, @intCast(p.prefix.len));
+                    if (p.text.len > 0) {
+                        _ = chat_win.printSegment(.{ .text = p.text }, .{ .row_offset = row, .col_offset = 1 + prefix_len });
+                    }
+                },
+                .styled => |sline| {
+                    // Fill background for code blocks
+                    if (sline.block_bg) |bg| {
+                        var c: u16 = 1;
+                        while (c < chat_win.width -| 1) : (c += 1) {
+                            chat_win.writeCell(c, row, .{
+                                .char = .{ .grapheme = " ", .width = 1 },
+                                .style = .{ .bg = bg },
+                            });
+                        }
+                    }
+                    // Print styled spans
+                    var col: u16 = 1 + sline.indent;
+                    for (sline.spans) |span| {
+                        var style = span.style;
+                        if (sline.block_bg) |bg| style.bg = bg;
+                        const result = chat_win.printSegment(.{
+                            .text = span.text,
+                            .style = style,
+                        }, .{ .row_offset = row, .col_offset = col, .wrap = .none });
+                        col = result.col;
+                    }
+                },
             }
-            const prefix_len = @as(u16, @intCast(entry.prefix.len));
-            _ = chat_win.printSegment(.{ .text = entry.text }, .{ .row_offset = row, .col_offset = 1 + prefix_len });
             row += 1;
         }
 

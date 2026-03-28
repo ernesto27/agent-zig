@@ -3,6 +3,7 @@ const std = @import("std");
 
 pub const llm = @import("llm.zig");
 pub const config = @import("config.zig");
+pub const markdown = @import("markdown.zig");
 
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you

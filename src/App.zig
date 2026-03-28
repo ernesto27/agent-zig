@@ -10,6 +10,8 @@ pub const Role = enum { user, assistant };
 pub const Message = struct {
     role: Role,
     content: []const u8,
+    styled_lines: ?[]const agent.markdown.StyledLine = null,
+    styled_content_len: usize = 0,
 };
 
 alloc: std.mem.Allocator,
@@ -30,10 +32,21 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
 }
 
 pub fn deinit(self: *App) void {
-    for (self.messages.items) |msg| {
+    for (self.messages.items) |*msg| {
         self.alloc.free(msg.content);
+        if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
     }
     self.messages.deinit(self.alloc);
+}
+
+pub fn getStyledLines(self: *App, msg: *Message) ![]const agent.markdown.StyledLine {
+    if (msg.styled_lines != null and msg.styled_content_len == msg.content.len) {
+        return msg.styled_lines.?;
+    }
+    if (msg.styled_lines) |old| agent.markdown.freeLines(self.alloc, old);
+    msg.styled_lines = try agent.markdown.parse(self.alloc, msg.content);
+    msg.styled_content_len = msg.content.len;
+    return msg.styled_lines.?;
 }
 
 const StreamCtx = struct {

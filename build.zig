@@ -92,6 +92,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("vaxis", vaxis_dep.module("vaxis"));
+    mod.addImport("vaxis", vaxis_dep.module("vaxis"));
 
     b.installArtifact(exe);
 
