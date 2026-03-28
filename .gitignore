@@ -1,0 +1,7 @@
+.env
+data.txt
+.zig-cache
+docs
+zig-out
+agent.log
+mock-server/node_modules
