@@ -32,14 +32,18 @@ pub const Client = struct {
         self: *Client,
         allocator: std.mem.Allocator,
         messages: []const message.Message,
+        tools: []const message.ToolDefinition,
     ) !std.json.Parsed(message.MessagesResponse) {
         const req = message.MessagesRequest{
             .model = self.config.model,
             .messages = messages,
+            .tools = tools,
         };
 
         const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
         defer allocator.free(body);
+
+        log.info("request body: {s}", .{body});
 
         const url = try std.fmt.allocPrint(allocator, "{s}/v1/messages", .{self.config.base_url});
         defer allocator.free(url);
@@ -62,6 +66,8 @@ pub const Client = struct {
         });
 
         if (result.status != .ok) {
+            const err_body = aw.writer.buffer[0..aw.writer.end];
+            log.err("HTTP {d}: {s}", .{ @intFromEnum(result.status), err_body });
             return error.HttpRequestFailed;
         }
 
@@ -131,18 +137,6 @@ pub const Client = struct {
         const body_reader = response.reader(&transfer_buf);
         try parseSseStream(allocator, body_reader, ctx, on_chunk);
         log.info("SSE stream complete", .{});
-    }
-
-    /// Convenience wrapper: send a single user message and return the response.
-    pub fn chat(
-        self: *Client,
-        allocator: std.mem.Allocator,
-        user_text: []const u8,
-    ) !std.json.Parsed(message.MessagesResponse) {
-        const msgs = [_]message.Message{
-            .{ .role = .user, .content = user_text },
-        };
-        return self.sendMessage(allocator, &msgs);
     }
 };
 
@@ -245,12 +239,12 @@ test "sendMessage with multi-turn history on local server" {
     defer client.deinit();
 
     const msgs = [_]message.Message{
-        .{ .role = .user, .content = "What is Zig?" },
-        .{ .role = .assistant, .content = "Zig is a systems programming language." },
-        .{ .role = .user, .content = "zig" },
+        .{ .role = .user, .content = .{ .text = "What is Zig?" } },
+        .{ .role = .assistant, .content = .{ .text = "Zig is a systems programming language." } },
+        .{ .role = .user, .content = .{ .text = "zig" } },
     };
 
-    const resp = client.sendMessage(alloc, &msgs) catch |err| switch (err) {
+    const resp = client.sendMessage(alloc, &msgs, &.{}) catch |err| switch (err) {
         error.ConnectionRefused => return error.ServerNotRunning,
         else => return err,
     };

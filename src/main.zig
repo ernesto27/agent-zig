@@ -270,8 +270,12 @@ pub fn main() !void {
 
         // Status
         var status_buf: [128]u8 = undefined;
-        const status = std.fmt.bufPrint(&status_buf, " messages: {d} | {s} | ctrl+q: quit ", .{ app.messages.items.len, if (app.is_loading) "THINKING" else "READY" }) catch "status";
-        _ = win.printSegment(.{ .text = status, .style = .{ .bg = .{ .rgb = .{ 0x40, 0x40, 0x40 } }, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } } }, .{ .row_offset = if (vx.screen.height == 0) 0 else vx.screen.height - 1, .col_offset = 0 });
+        const status_text = if (app.tool_status) |tool| blk: {
+            break :blk std.fmt.bufPrint(&status_buf, " messages: {d} | TOOL: {s} | ctrl+q: quit ", .{ app.messages.items.len, tool }) catch "status";
+        } else blk: {
+            break :blk std.fmt.bufPrint(&status_buf, " messages: {d} | {s} | ctrl+q: quit ", .{ app.messages.items.len, if (app.is_loading) "THINKING" else "READY" }) catch "status";
+        };
+        _ = win.printSegment(.{ .text = status_text, .style = .{ .bg = .{ .rgb = .{ 0x40, 0x40, 0x40 } }, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } } }, .{ .row_offset = if (vx.screen.height == 0) 0 else vx.screen.height - 1, .col_offset = 0 });
 
         try vx.render(tty.writer());
         app.needs_redraw = false;

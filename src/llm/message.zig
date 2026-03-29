@@ -7,9 +7,32 @@ pub const Role = enum {
     assistant,
 };
 
+pub const MessageContent = union(enum) {
+    text: []const u8,
+    tool_result_blocks: []const ToolResultBlock,
+    content_blocks: []const ContentBlock,
+
+    /// Custom serializer: text → "string", blocks → [{...}]
+    pub fn jsonStringify(self: MessageContent, jw: anytype) !void {
+        switch (self) {
+            .text => |t| try jw.write(t),
+            .tool_result_blocks => |blocks| {
+                try jw.beginArray();
+                for (blocks) |block| try jw.write(block);
+                try jw.endArray();
+            },
+            .content_blocks => |blocks| {
+                try jw.beginArray();
+                for (blocks) |block| try jw.write(block);
+                try jw.endArray();
+            },
+        }
+    }
+};
+
 pub const Message = struct {
     role: Role,
-    content: []const u8,
+    content: MessageContent,
 };
 
 pub const MessagesRequest = struct {
@@ -17,13 +40,83 @@ pub const MessagesRequest = struct {
     messages: []const Message,
     max_tokens: u32 = 1024,
     stream: bool = false,
+    tools: []const ToolDefinition = &.{},
+
+    /// Custom serializer: omit tools when empty, omit stream when false
+    pub fn jsonStringify(self: MessagesRequest, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("model");
+        try jw.write(self.model);
+        try jw.objectField("max_tokens");
+        try jw.write(self.max_tokens);
+        try jw.objectField("messages");
+        try jw.write(self.messages);
+        if (self.stream) {
+            try jw.objectField("stream");
+            try jw.write(true);
+        }
+        if (self.tools.len > 0) {
+            try jw.objectField("tools");
+            try jw.write(self.tools);
+        }
+        try jw.endObject();
+    }
+};
+
+// === Tool Types ===
+
+pub const ToolInputSchema = struct {
+    type: []const u8 = "object",
+    properties: std.json.Value = .null,
+    required: []const []const u8 = &.{},
+};
+
+pub const ToolDefinition = struct {
+    name: []const u8,
+    description: []const u8,
+    input_schema: ToolInputSchema,
+};
+
+pub const ToolResultBlock = struct {
+    type: []const u8 = "tool_result",
+    tool_use_id: []const u8,
+    content: []const u8,
+    is_error: bool = false,
 };
 
 // === Response Types ===
 
 pub const ContentBlock = struct {
     type: []const u8,
-    text: []const u8,
+    text: ?[]const u8 = null,
+    // tool_use block fields
+    id: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    input: std.json.Value = .null,
+
+    /// Only serialize fields relevant to the block type (text vs tool_use)
+    pub fn jsonStringify(self: ContentBlock, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write(self.type);
+        if (self.text) |t| {
+            try jw.objectField("text");
+            try jw.write(t);
+        }
+        if (self.id) |id| {
+            try jw.objectField("id");
+            try jw.write(id);
+        }
+        if (self.name) |n| {
+            try jw.objectField("name");
+            try jw.write(n);
+        }
+        if (self.input != .null) {
+            try jw.objectField("input");
+            try jw.write(self.input);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const Usage = struct {
@@ -79,7 +172,7 @@ test "serialize MessagesRequest to JSON" {
     const req = MessagesRequest{
         .model = "mock-model",
         .messages = &.{
-            .{ .role = .user, .content = "hello" },
+            .{ .role = .user, .content = .{ .text = "hello" } },
         },
     };
 
@@ -90,7 +183,8 @@ test "serialize MessagesRequest to JSON" {
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"model\":\"mock-model\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"role\":\"user\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"content\":\"hello\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"stream\":false") != null);
+    // stream:false is omitted by custom serializer
+    try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"stream\":false") == null);
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"max_tokens\":1024") != null);
 }
 

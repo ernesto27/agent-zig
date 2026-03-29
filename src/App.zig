@@ -16,17 +16,21 @@ pub const Message = struct {
 
 alloc: std.mem.Allocator,
 messages: std.ArrayList(Message),
+llm_history: std.ArrayList(agent.llm.Message),
 llm_client: *agent.llm.Client,
 mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
+tool_status: ?[]const u8 = null,
 
 const App = @This();
+const log = std.log.scoped(.app);
 
 pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
     return .{
         .alloc = alloc,
         .messages = .{},
+        .llm_history = .{},
         .llm_client = client,
     };
 }
@@ -37,6 +41,7 @@ pub fn deinit(self: *App) void {
         if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
     }
     self.messages.deinit(self.alloc);
+    self.llm_history.deinit(self.alloc);
 }
 
 pub fn getStyledLines(self: *App, msg: *Message) ![]const agent.markdown.StyledLine {
@@ -82,44 +87,159 @@ fn wakeLoop(loop: *EventLoop) void {
     } });
 }
 
-/// Function executed in a background thread to stream AI response
+/// Background thread: sends messages to LLM, executes tools, loops until done
 pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     const alloc = self.alloc;
 
-    // 1. Snapshot conversation history (skip empty streaming placeholder)
+    // 1. Snapshot the user's message into llm_history
     self.mutex.lock();
-    var llm_msgs = std.ArrayListUnmanaged(agent.llm.Message){};
-    defer llm_msgs.deinit(alloc);
-
-    for (self.messages.items) |msg| {
-        if (msg.content.len == 0) continue;
-        llm_msgs.append(alloc, .{
-            .role = if (msg.role == .user) .user else .assistant,
-            .content = msg.content,
-        }) catch {};
-    }
+    const last_user_msg = if (self.messages.items.len >= 2)
+        self.messages.items[self.messages.items.len - 2].content
+    else
+        "";
+    const user_text = alloc.dupe(u8, last_user_msg) catch {
+        self.is_loading = false;
+        self.mutex.unlock();
+        return;
+    };
+    self.llm_history.append(alloc, .{
+        .role = .user,
+        .content = .{ .text = user_text },
+    }) catch {};
     self.mutex.unlock();
 
-    // 2. Stream — onChunk fires per token and updates the last message in place
-    std.log.info("starting stream with {d} messages", .{llm_msgs.items.len});
-    var ctx = StreamCtx{ .app = self, .loop = loop };
-    const result = self.llm_client.sendMessageStreaming(alloc, llm_msgs.items, &ctx, onChunk);
+    // 2. Get tool definitions (arena keeps parsed JSON alive)
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    const tool_defs = agent.tools.getDefinitions(arena_alloc) catch &.{};
 
-    // 3. On error log it and show in TUI
-    if (result) |_| {} else |err| {
-        std.log.err("streaming failed: {}", .{err});
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        if (self.messages.items.len > 0) {
-            const last = &self.messages.items[self.messages.items.len - 1];
-            alloc.free(last.content);
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "(error: {})", .{err}) catch "(error)";
-            last.content = alloc.dupe(u8, msg) catch "";
+    // 3. Agentic loop
+    const max_iterations = 10;
+    var iteration: usize = 0;
+
+    while (iteration < max_iterations) : (iteration += 1) {
+        log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.llm_history.items.len });
+
+        // Call LLM (non-streaming)
+        const resp = self.llm_client.sendMessage(alloc, self.llm_history.items, tool_defs) catch |err| {
+            log.err("sendMessage failed: {}", .{err});
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            if (self.messages.items.len > 0) {
+                const last = &self.messages.items[self.messages.items.len - 1];
+                alloc.free(last.content);
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "(error: {})", .{err}) catch "(error)";
+                last.content = alloc.dupe(u8, msg) catch "";
+            }
+            break;
+        };
+        defer resp.deinit();
+
+        const response = resp.value;
+        log.info("response stop_reason: {s}", .{response.stop_reason orelse "null"});
+
+        // Collect text and tool_use blocks
+        var text_buf = std.ArrayList(u8){};
+        defer text_buf.deinit(alloc);
+
+        const ToolUse = struct { id: []const u8, name: []const u8, input: std.json.Value };
+        var tool_uses = std.ArrayList(ToolUse){};
+        defer tool_uses.deinit(alloc);
+
+        for (response.content) |block| {
+            if (std.mem.eql(u8, block.type, "text")) {
+                if (block.text) |t| text_buf.appendSlice(alloc, t) catch {};
+            } else if (std.mem.eql(u8, block.type, "tool_use")) {
+                tool_uses.append(alloc, .{
+                    .id = alloc.dupe(u8, block.id orelse "") catch "",
+                    .name = alloc.dupe(u8, block.name orelse "") catch "",
+                    .input = block.input,
+                }) catch {};
+            }
         }
+
+        // Update display with any text
+        if (text_buf.items.len > 0) {
+            self.mutex.lock();
+            if (self.messages.items.len > 0) {
+                const last = &self.messages.items[self.messages.items.len - 1];
+                const new_content = std.mem.concat(alloc, u8, &.{ last.content, text_buf.items }) catch last.content;
+                if (new_content.ptr != last.content.ptr) alloc.free(last.content);
+                last.content = new_content;
+            }
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            wakeLoop(loop);
+        }
+
+        // Check stop reason
+        const is_tool_use = if (response.stop_reason) |sr| std.mem.eql(u8, sr, "tool_use") else false;
+        if (!is_tool_use or tool_uses.items.len == 0) {
+            // No tools — append assistant text to history and done
+            if (text_buf.items.len > 0) {
+                const duped = alloc.dupe(u8, text_buf.items) catch break;
+                self.llm_history.append(alloc, .{
+                    .role = .assistant,
+                    .content = .{ .text = duped },
+                }) catch {};
+            }
+            break;
+        }
+
+        // Append assistant's tool_use blocks to history
+        const content_blocks = alloc.alloc(agent.llm.message.ContentBlock, response.content.len) catch break;
+        for (response.content, 0..) |block, i| {
+            content_blocks[i] = .{
+                .type = alloc.dupe(u8, block.type) catch "",
+                .text = if (block.text) |t| alloc.dupe(u8, t) catch null else null,
+                .id = if (block.id) |id| alloc.dupe(u8, id) catch null else null,
+                .name = if (block.name) |n| alloc.dupe(u8, n) catch null else null,
+                .input = block.input,
+            };
+        }
+        self.llm_history.append(alloc, .{
+            .role = .assistant,
+            .content = .{ .content_blocks = content_blocks },
+        }) catch {};
+
+        // Execute each tool
+        const tool_results = alloc.alloc(agent.llm.message.ToolResultBlock, tool_uses.items.len) catch break;
+        for (tool_uses.items, 0..) |tool_use, i| {
+            log.info("executing tool: {s}", .{tool_use.name});
+            self.mutex.lock();
+            self.tool_status = tool_use.name;
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            wakeLoop(loop);
+
+            const result = agent.tools.execute(alloc, tool_use.name, tool_use.input);
+            log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
+            tool_results[i] = .{
+                .tool_use_id = tool_use.id,
+                .content = result.content,
+                .is_error = result.is_error,
+            };
+        }
+
+        // Append tool results as user message, loop back
+        self.llm_history.append(alloc, .{
+            .role = .user,
+            .content = .{ .tool_result_blocks = tool_results },
+        }) catch {};
+
+        log.info("tool results appended, looping back", .{});
+        self.mutex.lock();
+        self.tool_status = null;
+        self.mutex.unlock();
     }
 
+    // Done
+    self.mutex.lock();
     self.is_loading = false;
+    self.tool_status = null;
     self.needs_redraw = true;
+    self.mutex.unlock();
     wakeLoop(loop);
 }
