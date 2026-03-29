@@ -114,7 +114,14 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     const arena_alloc = arena.allocator();
     const tool_defs = agent.tools.getDefinitions(arena_alloc) catch &.{};
 
-    // 3. Agentic loop
+    // 3. Agentic loop — keep all parsed responses alive until loop ends so that
+    //    content_blocks stored in llm_history can safely reference their JSON arenas.
+    var responses = std.ArrayList(std.json.Parsed(agent.llm.message.MessagesResponse)){};
+    defer {
+        for (responses.items) |*r| r.deinit();
+        responses.deinit(alloc);
+    }
+
     const max_iterations = 10;
     var iteration: usize = 0;
 
@@ -135,9 +142,10 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
             break;
         };
-        defer resp.deinit();
+        responses.append(alloc, resp) catch { resp.deinit(); break; };
+        const resp_ref = &responses.items[responses.items.len - 1];
 
-        const response = resp.value;
+        const response = resp_ref.value;
         log.info("response stop_reason: {s}", .{response.stop_reason orelse "null"});
 
         // Collect text and tool_use blocks
@@ -188,15 +196,22 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             break;
         }
 
-        // Append assistant's tool_use blocks to history
+        // Append assistant's tool_use blocks to history.
+        // Deep-copy block.input: the source lives in resp's arena which is freed after
+        // this fetchAiResponse call ends, but llm_history must survive across calls.
         const content_blocks = alloc.alloc(agent.llm.message.ContentBlock, response.content.len) catch break;
         for (response.content, 0..) |block, i| {
+            const input_copy: std.json.Value = if (block.input != .null) blk: {
+                const json_str = std.json.Stringify.valueAlloc(alloc, block.input, .{}) catch break :blk .null;
+                defer alloc.free(json_str);
+                break :blk std.json.parseFromSliceLeaky(std.json.Value, alloc, json_str, .{}) catch .null;
+            } else .null;
             content_blocks[i] = .{
                 .type = alloc.dupe(u8, block.type) catch "",
                 .text = if (block.text) |t| alloc.dupe(u8, t) catch null else null,
                 .id = if (block.id) |id| alloc.dupe(u8, id) catch null else null,
                 .name = if (block.name) |n| alloc.dupe(u8, n) catch null else null,
-                .input = block.input,
+                .input = input_copy,
             };
         }
         self.llm_history.append(alloc, .{
