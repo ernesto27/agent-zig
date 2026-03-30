@@ -67,6 +67,7 @@ pub fn main() !void {
     try vx.enterAltScreen(tty.writer());
     defer vx.exitAltScreen(tty.writer()) catch {};
     try vx.queryTerminal(tty.writer(), 1 * std.time.ns_per_s);
+    try vx.setMouseMode(tty.writer(), true);
 
     if (!vx.state.in_band_resize) try loop.init();
 
@@ -76,6 +77,14 @@ pub fn main() !void {
     var input = std.ArrayList(u8){};
     defer input.deinit(alloc);
     var cursor_pos: usize = 0;
+    var history = std.ArrayList([]const u8){};
+    defer {
+        for (history.items) |s| alloc.free(s);
+        history.deinit(alloc);
+    }
+    var history_idx: ?usize = null;
+    var draft = std.ArrayList(u8){};
+    defer draft.deinit(alloc);
 
     while (running) {
         const event = loop.nextEvent();
@@ -85,11 +94,31 @@ pub fn main() !void {
                 if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
                     running = false;
                 } else if (key.matches(vaxis.Key.up, .{})) {
-                    if (scroll_offset > 0) scroll_offset -= 1;
-                    auto_scroll = false;
+                    if (!app.tool_confirmation.pending and history.items.len > 0) {
+                        if (history_idx == null) {
+                            draft.clearRetainingCapacity();
+                            try draft.appendSlice(alloc, input.items);
+                            history_idx = history.items.len - 1;
+                        } else if (history_idx.? > 0) {
+                            history_idx = history_idx.? - 1;
+                        }
+                        input.clearRetainingCapacity();
+                        try input.appendSlice(alloc, history.items[history_idx.?]);
+                        cursor_pos = input.items.len;
+                    }
                 } else if (key.matches(vaxis.Key.down, .{})) {
-                    scroll_offset += 1;
-                    // Will re-enable auto_scroll in render if at bottom
+                    if (!app.tool_confirmation.pending and history_idx != null) {
+                        if (history_idx.? + 1 < history.items.len) {
+                            history_idx = history_idx.? + 1;
+                            input.clearRetainingCapacity();
+                            try input.appendSlice(alloc, history.items[history_idx.?]);
+                        } else {
+                            history_idx = null;
+                            input.clearRetainingCapacity();
+                            try input.appendSlice(alloc, draft.items);
+                        }
+                        cursor_pos = input.items.len;
+                    }
                 } else if (key.matches(vaxis.Key.left, .{})) {
                     if (cursor_pos > 0) cursor_pos -= 1;
                 } else if (key.matches(vaxis.Key.right, .{})) {
@@ -142,6 +171,9 @@ pub fn main() !void {
                         app.is_loading = true;
                         app.mutex.unlock();
 
+                        try history.append(alloc, try alloc.dupe(u8, input.items));
+                        history_idx = null;
+                        draft.clearRetainingCapacity();
                         input.clearRetainingCapacity();
                         auto_scroll = true;
                         cursor_pos = 0;
@@ -152,6 +184,16 @@ pub fn main() !void {
                     }
                 }
                 app.needs_redraw = true;
+            },
+            .mouse => |mouse| {
+                if (mouse.button == .wheel_up) {
+                    if (scroll_offset > 0) scroll_offset -|= 3;
+                    auto_scroll = false;
+                    app.needs_redraw = true;
+                } else if (mouse.button == .wheel_down) {
+                    scroll_offset += 3;
+                    app.needs_redraw = true;
+                }
             },
             .winsize => |ws| {
                 if (ws.rows != vx.screen.height or ws.cols != vx.screen.width) {
