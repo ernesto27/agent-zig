@@ -75,6 +75,7 @@ pub fn main() !void {
     var auto_scroll = true;
     var input = std.ArrayList(u8){};
     defer input.deinit(alloc);
+    var cursor_pos: usize = 0;
 
     while (running) {
         const event = loop.nextEvent();
@@ -89,10 +90,20 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.down, .{})) {
                     scroll_offset += 1;
                     // Will re-enable auto_scroll in render if at bottom
+                } else if (key.matches(vaxis.Key.left, .{})) {
+                    if (cursor_pos > 0) cursor_pos -= 1;
+                } else if (key.matches(vaxis.Key.right, .{})) {
+                    if (cursor_pos < input.items.len) cursor_pos += 1;
                 } else if (key.codepoint == 127 or key.codepoint == 8) {
-                    if (input.items.len > 0) input.items.len -= 1;
+                    if (cursor_pos > 0) {
+                        _ = input.orderedRemove(cursor_pos - 1);
+                        cursor_pos -= 1;
+                    }
                 } else if (key.text) |txt| {
-                    if (txt.len > 0) try input.appendSlice(alloc, txt);
+                    if (txt.len > 0) {
+                        try input.insertSlice(alloc, cursor_pos, txt);
+                        cursor_pos += txt.len;
+                    }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
@@ -104,6 +115,7 @@ pub fn main() !void {
 
                         input.clearRetainingCapacity();
                         auto_scroll = true;
+                        cursor_pos = 0;
 
                         // Spawn background thread
                         const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ &app, &loop });
@@ -263,10 +275,24 @@ pub fn main() !void {
             .text = prompt,
             .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 1 });
+        const text_col: u16 = 1 + @as(u16, @intCast(prompt.len));
+        if (cursor_pos > 0) {
+            _ = input_win.printSegment(.{
+                .text = input.items[0..cursor_pos],
+                .style = .{ .bold = true },
+            }, .{ .row_offset = 0, .col_offset = text_col });
+        }
+        const cursor_char: []const u8 = if (cursor_pos < input.items.len) input.items[cursor_pos .. cursor_pos + 1] else " ";
         _ = input_win.printSegment(.{
-            .text = input.items,
-            .style = .{ .bold = true },
-        }, .{ .row_offset = 0, .col_offset = 1 + @as(u16, @intCast(prompt.len)) });
+            .text = cursor_char,
+            .style = .{ .bold = true, .reverse = true },
+        }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) });
+        if (cursor_pos < input.items.len) {
+            _ = input_win.printSegment(.{
+                .text = input.items[cursor_pos + 1 ..],
+                .style = .{ .bold = true },
+            }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) + 1 });
+        }
 
         // Status
         var status_buf: [128]u8 = undefined;
