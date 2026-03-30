@@ -8,7 +8,7 @@ pub const ToolResult = struct {
     is_error: bool = false,
 };
 
-fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
+pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
     if (input != .object) return null;
     const val = input.object.get(field) orelse return null;
     if (val != .string) return null;

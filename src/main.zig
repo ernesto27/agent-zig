@@ -94,6 +94,35 @@ pub fn main() !void {
                     if (cursor_pos > 0) cursor_pos -= 1;
                 } else if (key.matches(vaxis.Key.right, .{})) {
                     if (cursor_pos < input.items.len) cursor_pos += 1;
+                } else if (key.matches('y', .{})) {
+                    if (app.tool_confirmation.pending) {
+                        app.mutex.lock();
+                        app.tool_confirmation.approved = true;
+                        app.tool_confirmation.pending = false;
+                        app.mutex.unlock();
+                        app.tool_confirmation.cond.signal();
+                    } else if (!app.is_loading) {
+                        try input.insertSlice(alloc, cursor_pos, "y");
+                        cursor_pos += 1;
+                    }
+                } else if (key.matches('n', .{})) {
+                    if (app.tool_confirmation.pending) {
+                        app.mutex.lock();
+                        var deny_buf: [256]u8 = undefined;
+                        const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else "edit";
+                        const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{
+                            action,
+                            app.tool_confirmation.file_path,
+                        }) catch "Permission denied";
+                        try app.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
+                        app.tool_confirmation.approved = false;
+                        app.tool_confirmation.pending = false;
+                        app.mutex.unlock();
+                        app.tool_confirmation.cond.signal();
+                    } else if (!app.is_loading) {
+                        try input.insertSlice(alloc, cursor_pos, "n");
+                        cursor_pos += 1;
+                    }
                 } else if (key.codepoint == 127 or key.codepoint == 8) {
                     if (cursor_pos > 0) {
                         _ = input.orderedRemove(cursor_pos - 1);
@@ -270,28 +299,42 @@ pub fn main() !void {
             .height = input_box_h,
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
-        const prompt = if (app.is_loading) "... " else "> ";
-        _ = input_win.printSegment(.{
-            .text = prompt,
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
-        }, .{ .row_offset = 0, .col_offset = 1 });
-        const text_col: u16 = 1 + @as(u16, @intCast(prompt.len));
-        if (cursor_pos > 0) {
+
+        if (app.tool_confirmation.pending) {
+            var confirm_buf: [256]u8 = undefined;
+            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else "edit";
+            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  y = yes   n = no", .{
+                action,
+                app.tool_confirmation.file_path,
+            }) catch " Allow file change?  y = yes   n = no";
             _ = input_win.printSegment(.{
-                .text = input.items[0..cursor_pos],
-                .style = .{ .bold = true },
-            }, .{ .row_offset = 0, .col_offset = text_col });
-        }
-        const cursor_char: []const u8 = if (cursor_pos < input.items.len) input.items[cursor_pos .. cursor_pos + 1] else " ";
-        _ = input_win.printSegment(.{
-            .text = cursor_char,
-            .style = .{ .bold = true, .reverse = true },
-        }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) });
-        if (cursor_pos < input.items.len) {
+                .text = confirm_text,
+                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+            }, .{ .row_offset = 0, .col_offset = 1 });
+        } else {
+            const prompt = if (app.is_loading) "... " else "> ";
             _ = input_win.printSegment(.{
-                .text = input.items[cursor_pos + 1 ..],
-                .style = .{ .bold = true },
-            }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) + 1 });
+                .text = prompt,
+                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+            }, .{ .row_offset = 0, .col_offset = 1 });
+            const text_col: u16 = 1 + @as(u16, @intCast(prompt.len));
+            if (cursor_pos > 0) {
+                _ = input_win.printSegment(.{
+                    .text = input.items[0..cursor_pos],
+                    .style = .{ .bold = true },
+                }, .{ .row_offset = 0, .col_offset = text_col });
+            }
+            const cursor_char: []const u8 = if (cursor_pos < input.items.len) input.items[cursor_pos .. cursor_pos + 1] else " ";
+            _ = input_win.printSegment(.{
+                .text = cursor_char,
+                .style = .{ .bold = true, .reverse = true },
+            }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) });
+            if (cursor_pos < input.items.len) {
+                _ = input_win.printSegment(.{
+                    .text = input.items[cursor_pos + 1 ..],
+                    .style = .{ .bold = true },
+                }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) + 1 });
+            }
         }
 
         // Status

@@ -14,6 +14,16 @@ pub const Message = struct {
     styled_content_len: usize = 0,
 };
 
+pub const ToolConfirmation = struct {
+    pending: bool = false,
+    tool_name: []const u8 = "",
+    file_path: []const u8 = "",
+    approved: bool = false,
+    cond: std.Thread.Condition = .{},
+};
+
+tool_confirmation: ToolConfirmation = .{},
+
 alloc: std.mem.Allocator,
 messages: std.ArrayList(Message),
 llm_history: std.ArrayList(agent.llm.Message),
@@ -142,7 +152,10 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
             break;
         };
-        responses.append(alloc, resp) catch { resp.deinit(); break; };
+        responses.append(alloc, resp) catch {
+            resp.deinit();
+            break;
+        };
         const resp_ref = &responses.items[responses.items.len - 1];
 
         const response = resp_ref.value;
@@ -173,7 +186,8 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             self.mutex.lock();
             if (self.messages.items.len > 0) {
                 const last = &self.messages.items[self.messages.items.len - 1];
-                const new_content = std.mem.concat(alloc, u8, &.{ last.content, text_buf.items }) catch last.content;
+                const sep: []const u8 = if (last.content.len > 0 and last.content[last.content.len - 1] != '\n') "\n" else "";
+                const new_content = std.mem.concat(alloc, u8, &.{ last.content, sep, text_buf.items }) catch last.content;
                 if (new_content.ptr != last.content.ptr) alloc.free(last.content);
                 last.content = new_content;
             }
@@ -223,11 +237,38 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         const tool_results = alloc.alloc(agent.llm.message.ToolResultBlock, tool_uses.items.len) catch break;
         for (tool_uses.items, 0..) |tool_use, i| {
             log.info("executing tool: {s}", .{tool_use.name});
-            self.mutex.lock();
-            self.tool_status = tool_use.name;
-            self.needs_redraw = true;
-            self.mutex.unlock();
-            wakeLoop(loop);
+            const needs_confirmation =
+                std.mem.eql(u8, tool_use.name, "write_file") or
+                std.mem.eql(u8, tool_use.name, "edit_file");
+
+            if (needs_confirmation) {
+                const fp = agent.tools.getStringField(tool_use.input, "file_path") orelse "";
+                self.mutex.lock();
+                self.tool_confirmation.pending = true;
+                self.tool_confirmation.tool_name = tool_use.name;
+                self.tool_confirmation.file_path = fp;
+                self.tool_confirmation.approved = false;
+                self.tool_status = tool_use.name;
+                self.needs_redraw = true;
+                self.mutex.unlock();
+                wakeLoop(loop);
+
+                self.mutex.lock();
+                while (self.tool_confirmation.pending) {
+                    self.tool_confirmation.cond.wait(&self.mutex);
+                }
+                const approved = self.tool_confirmation.approved;
+                self.mutex.unlock();
+
+                if (!approved) {
+                    tool_results[i] = .{
+                        .tool_use_id = tool_use.id,
+                        .content = "User denied permission",
+                        .is_error = true,
+                    };
+                    continue;
+                }
+            }
 
             const result = agent.tools.execute(alloc, tool_use.name, tool_use.input);
             log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
