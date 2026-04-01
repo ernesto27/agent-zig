@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig");
 const ui = @import("ui.zig");
+const at_picker_mod = @import("at_picker.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -39,6 +40,9 @@ pub fn main() !void {
     };
     defer parsed_config.deinit();
     const config = parsed_config.value;
+
+    var at_picker = at_picker_mod.AtPicker.init();
+    defer at_picker.deinit(alloc);
 
     var llm_client = agent.llm.Client.init(alloc, .{
         .base_url = config.baseUrl,
@@ -94,8 +98,14 @@ pub fn main() !void {
             .key_press => |key| {
                 if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
                     running = false;
+                } else if (key.matches(vaxis.Key.escape, .{})) {
+                    if (at_picker.active) {
+                        at_picker.reset(alloc);
+                    }
                 } else if (key.matches(vaxis.Key.up, .{})) {
-                    if (!app.tool_confirmation.pending and history.items.len > 0) {
+                    if (at_picker.active) {
+                        if (at_picker.selected > 0) at_picker.selected -= 1;
+                    } else if (!app.tool_confirmation.pending and history.items.len > 0) {
                         if (history_idx == null) {
                             draft.clearRetainingCapacity();
                             try draft.appendSlice(alloc, input.items);
@@ -108,7 +118,10 @@ pub fn main() !void {
                         cursor_pos = input.items.len;
                     }
                 } else if (key.matches(vaxis.Key.down, .{})) {
-                    if (!app.tool_confirmation.pending and history_idx != null) {
+                    if (at_picker.active) {
+                        if (at_picker.selected + 1 < at_picker.results.items.len)
+                            at_picker.selected += 1;
+                    } else if (!app.tool_confirmation.pending and history_idx != null) {
                         if (history_idx.? + 1 < history.items.len) {
                             history_idx = history_idx.? + 1;
                             input.clearRetainingCapacity();
@@ -157,14 +170,54 @@ pub fn main() !void {
                     if (cursor_pos > 0) {
                         _ = input.orderedRemove(cursor_pos - 1);
                         cursor_pos -= 1;
+                        if (at_picker.active) {
+                            if (cursor_pos <= at_picker.at_start) {
+                                at_picker.reset(alloc);
+                            } else {
+                                at_picker.query.clearRetainingCapacity();
+                                const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
+                                try at_picker.query.appendSlice(alloc, after_at);
+                                try at_picker.refresh(alloc);
+                            }
+                        }
                     }
                 } else if (key.text) |txt| {
                     if (txt.len > 0) {
                         try input.insertSlice(alloc, cursor_pos, txt);
                         cursor_pos += txt.len;
+
+                        if (std.mem.eql(u8, txt, "@") and !at_picker.active) {
+                            at_picker.active = true; 
+                            at_picker.at_start = cursor_pos - 1;
+                            try at_picker.refresh(alloc);
+                        } else if (at_picker.active) {
+                            at_picker.query.clearRetainingCapacity();
+                            const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
+                            try at_picker.query.appendSlice(alloc, after_at);
+                            try at_picker.refresh(alloc);
+                        }
                     }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
-                    if (input.items.len > 0 and !app.is_loading) {
+                    if (at_picker.active and at_picker.results.items.len > 0) {
+                        // Confirm file selection — do NOT submit message
+                        const picked_path = at_picker.results.items[at_picker.selected];
+
+                        // Replace '@query' with '@full/relative/path'
+                        var replacement = std.ArrayList(u8){};
+                        defer replacement.deinit(alloc);
+                        try replacement.append(alloc, '@');
+                        try replacement.appendSlice(alloc, picked_path);
+
+                        const span_len = cursor_pos - at_picker.at_start;
+                        var i: usize = 0;
+                        while (i < span_len) : (i += 1) {
+                            _ = input.orderedRemove(at_picker.at_start);
+                        }
+                        try input.insertSlice(alloc, at_picker.at_start, replacement.items);
+                        cursor_pos = at_picker.at_start + replacement.items.len;
+
+                        at_picker.reset(alloc);
+                    } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
                         const user_text = try alloc.dupe(u8, input.items);
                         try app.messages.append(alloc, .{ .role = .user, .content = user_text });
@@ -413,6 +466,33 @@ pub fn main() !void {
                     }
                     line_idx += 1;
                 }
+            }
+        }
+
+        // @picker overlay — rendered above the input box
+        if (at_picker.active and at_picker.results.items.len > 0) {
+            const n: u16 = @intCast(@min(at_picker.results.items.len, at_picker_mod.MAX_RESULTS));
+            const picker_h: u16 = n + 2; // +2 for border
+            const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;
+            const picker_win = win.child(.{
+                .x_off = 0,
+                .y_off = picker_y,
+                .width = vx.screen.width,
+                .height = picker_h,
+                .border = .{ .where = .all, .glyphs = .single_rounded },
+            });
+
+            for (at_picker.results.items, 0..) |path, idx| {
+                const picker_row: u16 = @intCast(idx);
+                if (picker_row >= n) break;
+                const is_selected = idx == at_picker.selected;
+                const style: vaxis.Style = if (is_selected)
+                    .{ .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true }
+                else
+                    .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } };
+                const prefix: []const u8 = if (is_selected) " > " else "   ";
+                const res = picker_win.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = picker_row, .col_offset = 0 });
+                _ = picker_win.printSegment(.{ .text = path, .style = style }, .{ .row_offset = picker_row, .col_offset = res.col });
             }
         }
 

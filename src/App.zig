@@ -141,6 +141,22 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     while (iteration < max_iterations) : (iteration += 1) {
         log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.llm_history.items.len });
 
+        // Log outgoing messages
+        log.info("--- REQUEST ({d} messages) ---", .{self.llm_history.items.len});
+        for (self.llm_history.items) |msg| {
+            const role_str = @tagName(msg.role);
+            switch (msg.content) {
+                .text => |t| log.info("[{s}] {s}", .{ role_str, t }),
+                .tool_result_blocks => |blocks| for (blocks) |b| {
+                    log.info("[{s}] tool_result id={s} content={s}", .{ role_str, b.tool_use_id, b.content });
+                },
+                .content_blocks => |blocks| for (blocks) |b| {
+                    if (b.text) |t| log.info("[{s}] text: {s}", .{ role_str, t });
+                    if (b.name) |n| log.info("[{s}] tool_use: {s}", .{ role_str, n });
+                },
+            }
+        }
+
         // Call LLM (non-streaming)
         const resp = self.llm_client.sendMessage(alloc, self.llm_history.items, tool_defs) catch |err| {
             log.err("sendMessage failed: {}", .{err});
@@ -162,7 +178,18 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         const resp_ref = &responses.items[responses.items.len - 1];
 
         const response = resp_ref.value;
-        log.info("response stop_reason: {s}", .{response.stop_reason orelse "null"});
+        log.info("--- RESPONSE stop_reason={s} tokens={d}in/{d}out ---", .{
+            response.stop_reason orelse "null",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        });
+        for (response.content) |block| {
+            if (std.mem.eql(u8, block.type, "text")) {
+                log.info("[assistant] text: {s}", .{block.text orelse ""});
+            } else if (std.mem.eql(u8, block.type, "tool_use")) {
+                log.info("[assistant] tool_use: {s} id={s}", .{ block.name orelse "", block.id orelse "" });
+            }
+        }
 
         // Collect text and tool_use blocks
         var text_buf = std.ArrayList(u8){};
