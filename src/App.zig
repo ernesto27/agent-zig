@@ -20,10 +20,13 @@ pub const ToolConfirmation = struct {
     file_path: []const u8 = "",
     approved: bool = false,
     cond: std.Thread.Condition = .{},
+    content: []const u8 = "",
+    old_string: []const u8 = "",
+    new_string: []const u8 = "",
 };
 
 tool_confirmation: ToolConfirmation = .{},
-
+preview_scroll: usize = 0,
 alloc: std.mem.Allocator,
 messages: std.ArrayList(Message),
 llm_history: std.ArrayList(agent.llm.Message),
@@ -243,10 +246,17 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
 
             if (needs_confirmation) {
                 const fp = agent.tools.getStringField(tool_use.input, "file_path") orelse "";
+                const cnt = agent.tools.getStringField(tool_use.input, "content") orelse "";
+                const old_s = agent.tools.getStringField(tool_use.input, "old_string") orelse "";
+                const new_s = agent.tools.getStringField(tool_use.input, "new_string") orelse "";
+
                 self.mutex.lock();
                 self.tool_confirmation.pending = true;
                 self.tool_confirmation.tool_name = tool_use.name;
                 self.tool_confirmation.file_path = fp;
+                self.tool_confirmation.content = cnt;
+                self.tool_confirmation.old_string = old_s;
+                self.tool_confirmation.new_string = new_s;
                 self.tool_confirmation.approved = false;
                 self.tool_status = tool_use.name;
                 self.needs_redraw = true;

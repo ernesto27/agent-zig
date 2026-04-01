@@ -1,7 +1,8 @@
 
 [x] - basic read tool file
 [] - show thinking
-
+[x] - show code before accept- deny
+[] - tool could not create child folders
 
 
 ================================================================================

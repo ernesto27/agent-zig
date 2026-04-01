@@ -5,3 +5,4 @@ docs
 zig-out
 agent.log
 mock-server/node_modules
+test
