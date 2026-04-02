@@ -9,11 +9,13 @@ pub const AtPicker = struct {
     results: std.ArrayList([]u8),
     selected: usize = 0,
     at_start: usize = 0,
+    picked_files: std.ArrayList([]u8),
 
     pub fn init() AtPicker {
         return .{
             .query = std.ArrayList(u8){},
             .results = std.ArrayList([]u8){},
+            .picked_files = std.ArrayList([]u8){},
         };
     }
 
@@ -21,6 +23,8 @@ pub const AtPicker = struct {
         self.query.deinit(alloc);
         for (self.results.items) |r| alloc.free(r);
         self.results.deinit(alloc);
+        self.clearPicked(alloc);
+        self.picked_files.deinit(alloc);
     }
 
     pub fn reset(self: *AtPicker, alloc: std.mem.Allocator) void {
@@ -30,6 +34,35 @@ pub const AtPicker = struct {
         self.results.clearRetainingCapacity();
         self.selected = 0;
         self.at_start = 0;
+    }
+
+    /// Record a confirmed file pick. Dupes the path so caller can reset freely.
+    pub fn addPicked(self: *AtPicker, alloc: std.mem.Allocator, path: []const u8) !void {
+        const owned = try alloc.dupe(u8, path);
+        errdefer alloc.free(owned);
+        try self.picked_files.append(alloc, owned);
+    }
+
+    /// Free all picked paths and clear the list. Called at message submit.
+    pub fn clearPicked(self: *AtPicker, alloc: std.mem.Allocator) void {
+        for (self.picked_files.items) |p| alloc.free(p);
+        self.picked_files.clearRetainingCapacity();
+    }
+
+    /// Returns owned slice of paths still referenced as @path in `input`.
+    /// Clears the picked list. Caller owns the slice and each path string.
+    pub fn takePicked(self: *AtPicker, alloc: std.mem.Allocator, input: []const u8) [][]u8 {
+        var result = std.ArrayList([]u8){};
+        for (self.picked_files.items) |path| {
+            var buf: [516]u8 = undefined;
+            const at_path = std.fmt.bufPrint(&buf, "@{s}", .{path}) catch continue;
+            if (std.mem.indexOf(u8, input, at_path) != null) {
+                const owned = alloc.dupe(u8, path) catch continue;
+                result.append(alloc, owned) catch alloc.free(owned);
+            }
+        }
+        self.clearPicked(alloc);
+        return result.toOwnedSlice(alloc) catch &.{};
     }
 
     pub fn refresh(self: *AtPicker, alloc: std.mem.Allocator) !void {

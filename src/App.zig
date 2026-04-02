@@ -31,6 +31,7 @@ alloc: std.mem.Allocator,
 messages: std.ArrayList(Message),
 llm_history: std.ArrayList(agent.llm.Message),
 llm_client: *agent.llm.Client,
+pending_attachments: std.ArrayList([]u8),
 mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
@@ -45,6 +46,7 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
         .messages = .{},
         .llm_history = .{},
         .llm_client = client,
+        .pending_attachments = .{},
     };
 }
 
@@ -55,6 +57,13 @@ pub fn deinit(self: *App) void {
     }
     self.messages.deinit(self.alloc);
     self.llm_history.deinit(self.alloc);
+    self.clearPendingAttachments();
+    self.pending_attachments.deinit(self.alloc);
+}
+
+fn clearPendingAttachments(self: *App) void {
+    for (self.pending_attachments.items) |p| self.alloc.free(p);
+    self.pending_attachments.clearRetainingCapacity();
 }
 
 pub fn getStyledLines(self: *App, msg: *Message) ![]const agent.markdown.StyledLine {
@@ -110,11 +119,41 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         self.messages.items[self.messages.items.len - 2].content
     else
         "";
-    const user_text = alloc.dupe(u8, last_user_msg) catch {
-        self.is_loading = false;
-        self.mutex.unlock();
-        return;
+
+    const user_text = blk: {
+        var out = std.ArrayList(u8){};
+        out.appendSlice(alloc, last_user_msg) catch {
+            out.deinit(alloc);
+            self.is_loading = false;
+            self.mutex.unlock();
+            return;
+        };
+
+        const max_size = 512 * 1024;
+        for (self.pending_attachments.items) |path| {
+            const file = (if (std.fs.path.isAbsolute(path))
+                std.fs.openFileAbsolute(path, .{})
+            else
+                std.fs.cwd().openFile(path, .{})) catch continue;
+            defer file.close();
+            const contents = file.readToEndAlloc(alloc, max_size) catch continue;
+            defer alloc.free(contents);
+            out.appendSlice(alloc, "\n\n<file path=\"") catch {};
+            out.appendSlice(alloc, path) catch {};
+            out.appendSlice(alloc, "\">\n") catch {};
+            out.appendSlice(alloc, contents) catch {};
+            out.appendSlice(alloc, "\n</file>") catch {};
+        }
+
+        self.clearPendingAttachments();
+        break :blk out.toOwnedSlice(alloc) catch {
+            out.deinit(alloc);
+            self.is_loading = false;
+            self.mutex.unlock();
+            return;
+        };
     };
+
     self.llm_history.append(alloc, .{
         .role = .user,
         .content = .{ .text = user_text },

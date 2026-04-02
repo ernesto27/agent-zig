@@ -21,7 +21,7 @@ fn logToFile(
 ) void {
     const f = log_file orelse return;
     const prefix = comptime "[" ++ @tagName(level) ++ "] (" ++ @tagName(scope) ++ ") ";
-    var buf: [2048]u8 = undefined;
+    var buf: [1024 * 1024]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, prefix ++ format ++ "\n", args) catch return;
     f.writeAll(msg) catch {};
 }
@@ -187,7 +187,7 @@ pub fn main() !void {
                         cursor_pos += txt.len;
 
                         if (std.mem.eql(u8, txt, "@") and !at_picker.active) {
-                            at_picker.active = true; 
+                            at_picker.active = true;
                             at_picker.at_start = cursor_pos - 1;
                             try at_picker.refresh(alloc);
                         } else if (at_picker.active) {
@@ -201,6 +201,9 @@ pub fn main() !void {
                     if (at_picker.active and at_picker.results.items.len > 0) {
                         // Confirm file selection — do NOT submit message
                         const picked_path = at_picker.results.items[at_picker.selected];
+
+                        // Track the pick BEFORE reset() frees results
+                        try at_picker.addPicked(alloc, picked_path);
 
                         // Replace '@query' with '@full/relative/path'
                         var replacement = std.ArrayList(u8){};
@@ -219,6 +222,11 @@ pub fn main() !void {
                         at_picker.reset(alloc);
                     } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
+
+                        const picked = at_picker.takePicked(alloc, input.items);
+                        defer alloc.free(picked);
+                        for (picked) |p| app.pending_attachments.append(alloc, p) catch alloc.free(p);
+
                         const user_text = try alloc.dupe(u8, input.items);
                         try app.messages.append(alloc, .{ .role = .user, .content = user_text });
                         try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
