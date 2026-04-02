@@ -66,56 +66,68 @@ const edit_file_schema_json =
     \\}
 ;
 
-pub fn getDefinitions(allocator: std.mem.Allocator) ![]const message.ToolDefinition {
-    const read_schema = try std.json.parseFromSlice(
-        std.json.Value,
-        allocator,
-        read_file_schema_json,
-        .{},
-    );
+const bash_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "command": {
+    \\      "type": "string",
+    \\      "description": "The shell command to execute"
+    \\    }
+    \\  },
+    \\  "required": ["command"]
+    \\}
+;
 
-    const write_schema = try std.json.parseFromSlice(
-        std.json.Value,
-        allocator,
-        write_file_schema_json,
-        .{},
-    );
+const ToolSpec = struct {
+    name: []const u8,
+    description: []const u8,
+    schema_json: []const u8,
+    required: []const []const u8,
+};
 
-    const edit_schema = try std.json.parseFromSlice(
-        std.json.Value,
-        allocator,
-        edit_file_schema_json,
-        .{},
-    );
-
-    const defs = try allocator.alloc(message.ToolDefinition, 3);
-    defs[0] = .{
+const tool_specs = [_]ToolSpec{
+    .{
         .name = "read_file",
         .description = "Read the contents of a file at the given path. Returns the file content as text.",
-        .input_schema = .{
-            .type = "object",
-            .properties = read_schema.value.object.get("properties") orelse .null,
-            .required = &.{"file_path"},
-        },
-    };
-    defs[1] = .{
+        .schema_json = read_file_schema_json,
+        .required = &.{"file_path"},
+    },
+    .{
         .name = "write_file",
         .description = "Write content to a file at the given path. Creates the file if it doesn't exist, overwrites if it does.",
-        .input_schema = .{
-            .type = "object",
-            .properties = write_schema.value.object.get("properties") orelse .null,
-            .required = &.{ "file_path", "content" },
-        },
-    };
-    defs[2] = .{
+        .schema_json = write_file_schema_json,
+        .required = &.{ "file_path", "content" },
+    },
+    .{
         .name = "edit_file",
         .description = "Edit a file by replacing an exact string with a new string. old_string must appear exactly once in the file.",
-        .input_schema = .{
-            .type = "object",
-            .properties = edit_schema.value.object.get("properties") orelse .null,
-            .required = &.{ "file_path", "old_string", "new_string" },
-        },
-    };
+        .schema_json = edit_file_schema_json,
+        .required = &.{ "file_path", "old_string", "new_string" },
+    },
+    .{
+        .name = "bash",
+        .description = "Run a shell command and return its output. Use for file system operations, running tests, compiling code, etc.",
+        .schema_json = bash_schema_json,
+        .required = &.{"command"},
+    },
+};
+
+pub fn getDefinitions(allocator: std.mem.Allocator) ![]const message.ToolDefinition {
+    const defs = try allocator.alloc(message.ToolDefinition, tool_specs.len);
+    for (tool_specs, 0..) |spec, i| {
+        const schema = try std.json.parseFromSlice(std.json.Value, allocator, spec.schema_json, .{});
+        defs[i] = .{
+            .name = spec.name,
+            .description = spec.description,
+            .input_schema = .{
+                .type = "object",
+                .properties = schema.value.object.get("properties") orelse .null,
+                .required = spec.required,
+            },
+        };
+    }
+
     return defs;
 }
 
@@ -128,6 +140,9 @@ pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.j
     }
     if (std.mem.eql(u8, tool_name, "edit_file")) {
         return editFile(allocator, input);
+    }
+    if (std.mem.eql(u8, tool_name, "bash")) {
+        return runBash(allocator, input);
     }
 
     return .{
@@ -285,4 +300,35 @@ fn editFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
     const result = std.fmt.allocPrint(allocator, "Successfully edited {s}", .{file_path.?}) catch
         return .{ .content = "File edited", .is_error = false };
     return .{ .content = result };
+}
+
+fn runBash(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
+    const command = getStringField(input, "command") orelse return .{ .content = "Invalid input: expected { command: string }", .is_error = true };
+    log.info("running bash: {s}", .{command});
+
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "/bin/sh", "-c", command },
+        .max_output_bytes = 256 * 1024,
+    }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Failed to run command: {}", .{err}) catch
+            return .{ .content = "Failed to run command", .is_error = true };
+        return .{ .content = msg, .is_error = true };
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const exit_code: u8 = switch (result.term) {
+        .Exited => |code| code,
+        else => 1,
+    };
+
+    const output = if (result.stderr.len == 0)
+        allocator.dupe(u8, result.stdout) catch
+            return .{ .content = "Out of memory", .is_error = true }
+    else
+        std.mem.concat(allocator, u8, &.{ result.stdout, "\n[stderr]\n", result.stderr }) catch
+            return .{ .content = "Out of memory", .is_error = true };
+
+    return .{ .content = output, .is_error = exit_code != 0 };
 }

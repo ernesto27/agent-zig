@@ -23,6 +23,7 @@ pub const ToolConfirmation = struct {
     content: []const u8 = "",
     old_string: []const u8 = "",
     new_string: []const u8 = "",
+    cursor: u8 = 0, // 0 = Yes, 1 = No
 };
 
 tool_confirmation: ToolConfirmation = .{},
@@ -31,6 +32,7 @@ alloc: std.mem.Allocator,
 messages: std.ArrayList(Message),
 llm_history: std.ArrayList(agent.llm.Message),
 llm_client: *agent.llm.Client,
+pending_attachments: std.ArrayList([]u8),
 mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
@@ -45,6 +47,7 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
         .messages = .{},
         .llm_history = .{},
         .llm_client = client,
+        .pending_attachments = .{},
     };
 }
 
@@ -55,6 +58,13 @@ pub fn deinit(self: *App) void {
     }
     self.messages.deinit(self.alloc);
     self.llm_history.deinit(self.alloc);
+    self.clearPendingAttachments();
+    self.pending_attachments.deinit(self.alloc);
+}
+
+fn clearPendingAttachments(self: *App) void {
+    for (self.pending_attachments.items) |p| self.alloc.free(p);
+    self.pending_attachments.clearRetainingCapacity();
 }
 
 pub fn getStyledLines(self: *App, msg: *Message) ![]const agent.markdown.StyledLine {
@@ -110,11 +120,41 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         self.messages.items[self.messages.items.len - 2].content
     else
         "";
-    const user_text = alloc.dupe(u8, last_user_msg) catch {
-        self.is_loading = false;
-        self.mutex.unlock();
-        return;
+
+    const user_text = blk: {
+        var out = std.ArrayList(u8){};
+        out.appendSlice(alloc, last_user_msg) catch {
+            out.deinit(alloc);
+            self.is_loading = false;
+            self.mutex.unlock();
+            return;
+        };
+
+        const max_size = 512 * 1024;
+        for (self.pending_attachments.items) |path| {
+            const file = (if (std.fs.path.isAbsolute(path))
+                std.fs.openFileAbsolute(path, .{})
+            else
+                std.fs.cwd().openFile(path, .{})) catch continue;
+            defer file.close();
+            const contents = file.readToEndAlloc(alloc, max_size) catch continue;
+            defer alloc.free(contents);
+            out.appendSlice(alloc, "\n\n<file path=\"") catch {};
+            out.appendSlice(alloc, path) catch {};
+            out.appendSlice(alloc, "\">\n") catch {};
+            out.appendSlice(alloc, contents) catch {};
+            out.appendSlice(alloc, "\n</file>") catch {};
+        }
+
+        self.clearPendingAttachments();
+        break :blk out.toOwnedSlice(alloc) catch {
+            out.deinit(alloc);
+            self.is_loading = false;
+            self.mutex.unlock();
+            return;
+        };
     };
+
     self.llm_history.append(alloc, .{
         .role = .user,
         .content = .{ .text = user_text },
@@ -269,10 +309,15 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             log.info("executing tool: {s}", .{tool_use.name});
             const needs_confirmation =
                 std.mem.eql(u8, tool_use.name, "write_file") or
-                std.mem.eql(u8, tool_use.name, "edit_file");
+                std.mem.eql(u8, tool_use.name, "edit_file") or
+                std.mem.eql(u8, tool_use.name, "bash");
 
             if (needs_confirmation) {
-                const fp = agent.tools.getStringField(tool_use.input, "file_path") orelse "";
+                const is_bash = std.mem.eql(u8, tool_use.name, "bash");
+                const fp = if (is_bash)
+                    agent.tools.getStringField(tool_use.input, "command") orelse ""
+                else
+                    agent.tools.getStringField(tool_use.input, "file_path") orelse "";
                 const cnt = agent.tools.getStringField(tool_use.input, "content") orelse "";
                 const old_s = agent.tools.getStringField(tool_use.input, "old_string") orelse "";
                 const new_s = agent.tools.getStringField(tool_use.input, "new_string") orelse "";
@@ -285,6 +330,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
                 self.tool_confirmation.old_string = old_s;
                 self.tool_confirmation.new_string = new_s;
                 self.tool_confirmation.approved = false;
+                self.tool_confirmation.cursor = 0;
                 self.tool_status = tool_use.name;
                 self.needs_redraw = true;
                 self.mutex.unlock();

@@ -11,6 +11,19 @@ pub const Config = struct {
 
 const anthropic_version = "2023-06-01";
 
+/// Parse `json_bytes` and re-serialize with indentation for readable logging.
+/// Returns a new allocation — caller must free. Falls back to duping the
+/// original bytes if parsing fails (so the caller can always free the result).
+fn prettyJson(allocator: std.mem.Allocator, json_bytes: []const u8) ![]u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{ .ignore_unknown_fields = true });
+    const pretty = std.json.Stringify.valueAlloc(allocator, parsed.value, .{ .whitespace = .indent_2 }) catch {
+        parsed.deinit();
+        return allocator.dupe(u8, json_bytes);
+    };
+    parsed.deinit();
+    return pretty;
+}
+
 pub const Client = struct {
     http_client: std.http.Client,
     config: Config,
@@ -43,7 +56,9 @@ pub const Client = struct {
         const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
         defer allocator.free(body);
 
-        log.info("request body: {s}", .{body});
+        const pretty_req = prettyJson(allocator, body) catch body;
+        defer if (pretty_req.ptr != body.ptr) allocator.free(pretty_req);
+        log.info("request body:\n{s}", .{pretty_req});
 
         const url = try std.fmt.allocPrint(allocator, "{s}/v1/messages", .{self.config.base_url});
         defer allocator.free(url);
@@ -72,6 +87,9 @@ pub const Client = struct {
         }
 
         const response_bytes = aw.writer.buffer[0..aw.writer.end];
+        const pretty_resp = prettyJson(allocator, response_bytes) catch response_bytes;
+        defer if (pretty_resp.ptr != response_bytes.ptr) allocator.free(pretty_resp);
+        log.info("response body:\n{s}", .{pretty_resp});
         return std.json.parseFromSlice(
             message.MessagesResponse,
             allocator,

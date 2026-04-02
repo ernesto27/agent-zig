@@ -21,7 +21,7 @@ fn logToFile(
 ) void {
     const f = log_file orelse return;
     const prefix = comptime "[" ++ @tagName(level) ++ "] (" ++ @tagName(scope) ++ ") ";
-    var buf: [2048]u8 = undefined;
+    var buf: [1024 * 1024]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, prefix ++ format ++ "\n", args) catch return;
     f.writeAll(msg) catch {};
 }
@@ -105,6 +105,8 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.up, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected > 0) at_picker.selected -= 1;
+                    } else if (app.tool_confirmation.pending) {
+                        app.tool_confirmation.cursor = 0;
                     } else if (!app.tool_confirmation.pending and history.items.len > 0) {
                         if (history_idx == null) {
                             draft.clearRetainingCapacity();
@@ -121,6 +123,8 @@ pub fn main() !void {
                     if (at_picker.active) {
                         if (at_picker.selected + 1 < at_picker.results.items.len)
                             at_picker.selected += 1;
+                    } else if (app.tool_confirmation.pending) {
+                        app.tool_confirmation.cursor = 1;
                     } else if (!app.tool_confirmation.pending and history_idx != null) {
                         if (history_idx.? + 1 < history.items.len) {
                             history_idx = history_idx.? + 1;
@@ -187,7 +191,7 @@ pub fn main() !void {
                         cursor_pos += txt.len;
 
                         if (std.mem.eql(u8, txt, "@") and !at_picker.active) {
-                            at_picker.active = true; 
+                            at_picker.active = true;
                             at_picker.at_start = cursor_pos - 1;
                             try at_picker.refresh(alloc);
                         } else if (at_picker.active) {
@@ -198,9 +202,30 @@ pub fn main() !void {
                         }
                     }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
-                    if (at_picker.active and at_picker.results.items.len > 0) {
+                    if (app.tool_confirmation.pending) {
+                        if (app.tool_confirmation.cursor == 0) {
+                            app.mutex.lock();
+                            app.tool_confirmation.approved = true;
+                            app.tool_confirmation.pending = false;
+                            app.mutex.unlock();
+                            app.tool_confirmation.cond.signal();
+                        } else {
+                            app.mutex.lock();
+                            var deny_buf: [256]u8 = undefined;
+                            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
+                            const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{ action, app.tool_confirmation.file_path }) catch "Permission denied";
+                            try app.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
+                            app.tool_confirmation.approved = false;
+                            app.tool_confirmation.pending = false;
+                            app.mutex.unlock();
+                            app.tool_confirmation.cond.signal();
+                        }
+                    } else if (at_picker.active and at_picker.results.items.len > 0) {
                         // Confirm file selection — do NOT submit message
                         const picked_path = at_picker.results.items[at_picker.selected];
+
+                        // Track the pick BEFORE reset() frees results
+                        try at_picker.addPicked(alloc, picked_path);
 
                         // Replace '@query' with '@full/relative/path'
                         var replacement = std.ArrayList(u8){};
@@ -219,6 +244,11 @@ pub fn main() !void {
                         at_picker.reset(alloc);
                     } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
+
+                        const picked = at_picker.takePicked(alloc, input.items);
+                        defer alloc.free(picked);
+                        for (picked) |p| app.pending_attachments.append(alloc, p) catch alloc.free(p);
+
                         const user_text = try alloc.dupe(u8, input.items);
                         try app.messages.append(alloc, .{ .role = .user, .content = user_text });
                         try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
@@ -281,7 +311,18 @@ pub fn main() !void {
         // Layout constants
         const input_box_h: u16 = 3; // top border + 1 content row + bottom border
         const chat_y: u16 = 1;
-        const preview_h: u16 = if (app.tool_confirmation.pending) 14 else 0;
+        const preview_h: u16 = if (app.tool_confirmation.pending) blk: {
+            const content_lines: usize = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file"))
+                std.mem.count(u8, app.tool_confirmation.content, "\n") + 1
+            else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "edit_file"))
+                std.mem.count(u8, app.tool_confirmation.old_string, "\n") +
+                    std.mem.count(u8, app.tool_confirmation.new_string, "\n") + 2
+            else
+                1; // bash: "Do you want to proceed?"
+            // title(1) + content + blank(2) + Yes/No(2) + bottom margin(1)
+            const needed: u16 = @intCast(@min(content_lines + 6, 20));
+            break :blk @max(needed, 8);
+        } else 0;
         const chat_h_total: u16 = if (vx.screen.height > 1 + input_box_h + preview_h + 1) vx.screen.height - 1 - input_box_h - preview_h - 1 else 1;
         const preview_y: u16 = chat_y + chat_h_total;
         const input_y: u16 = preview_y + preview_h;
@@ -401,6 +442,7 @@ pub fn main() !void {
         // Preview panel
         if (app.tool_confirmation.pending) {
             const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
+            const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
             const preview_win = win.child(.{
                 .x_off = 0,
                 .y_off = preview_y,
@@ -410,7 +452,7 @@ pub fn main() !void {
             });
             var title_buf: [256]u8 = undefined;
             const title = std.fmt.bufPrint(&title_buf, " {s} {s} ", .{
-                if (is_write) "New file:" else "Editing:",
+                if (is_bash) "Run:" else if (is_write) "New file:" else "Editing:",
                 app.tool_confirmation.file_path,
             }) catch " Preview ";
             _ = preview_win.printSegment(.{
@@ -420,7 +462,12 @@ pub fn main() !void {
 
             const preview_content_h = if (preview_win.height > 1) preview_win.height - 1 else 0;
 
-            if (is_write) {
+            if (is_bash) {
+                _ = preview_win.printSegment(.{
+                    .text = " Do you want to proceed?",
+                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+                }, .{ .row_offset = 2, .col_offset = 1 });
+            } else if (is_write) {
                 var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
                 var line_idx: usize = 0;
                 var prow: u16 = 1;
@@ -467,6 +514,20 @@ pub fn main() !void {
                     line_idx += 1;
                 }
             }
+
+            // Shared Yes/No selector at the bottom of the preview panel
+            const sel_row = preview_win.height -| 3;
+            const yes_selected = app.tool_confirmation.cursor == 0;
+            _ = preview_win.printSegment(.{
+                .text = if (yes_selected) " ❯ 1. Yes" else "   1. Yes",
+                .style = .{ .fg = if (yes_selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = yes_selected },
+            }, .{ .row_offset = sel_row, .col_offset = 1 });
+
+            const no_selected = app.tool_confirmation.cursor == 1;
+            _ = preview_win.printSegment(.{
+                .text = if (no_selected) " ❯ 2. No" else "   2. No",
+                .style = .{ .fg = if (no_selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = no_selected },
+            }, .{ .row_offset = sel_row + 1, .col_offset = 1 });
         }
 
         // @picker overlay — rendered above the input box
@@ -506,11 +567,11 @@ pub fn main() !void {
 
         if (app.tool_confirmation.pending) {
             var confirm_buf: [256]u8 = undefined;
-            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else "edit";
-            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  y = yes   n = no   scroll = preview", .{
+            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
+            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm", .{
                 action,
                 app.tool_confirmation.file_path,
-            }) catch " Allow file change?  y = yes   n = no";
+            }) catch " ↑↓ select  Enter confirm";
             _ = input_win.printSegment(.{
                 .text = confirm_text,
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
@@ -542,13 +603,34 @@ pub fn main() !void {
         }
 
         // Status
+        const status_row: u16 = if (vx.screen.height == 0) 0 else vx.screen.height - 1;
+        const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
         var status_buf: [128]u8 = undefined;
-        const status_text = if (app.tool_status) |tool| blk: {
-            break :blk std.fmt.bufPrint(&status_buf, " messages: {d} | TOOL: {s} | ctrl+q: quit ", .{ app.messages.items.len, tool }) catch "status";
-        } else blk: {
-            break :blk std.fmt.bufPrint(&status_buf, " messages: {d} | {s} | ctrl+q: quit ", .{ app.messages.items.len, if (app.is_loading) "THINKING" else "READY" }) catch "status";
-        };
-        _ = win.printSegment(.{ .text = status_text, .style = .{ .bg = .{ .rgb = .{ 0x40, 0x40, 0x40 } }, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } } }, .{ .row_offset = if (vx.screen.height == 0) 0 else vx.screen.height - 1, .col_offset = 0 });
+
+        // Model name — highlighted
+        var res = win.printSegment(.{
+            .text = std.fmt.bufPrint(&status_buf, " {s} ", .{config.model}) catch " ? ",
+            .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        }, .{ .row_offset = status_row, .col_offset = 0 });
+
+        // State / tool info
+        var info_buf: [128]u8 = undefined;
+        const info_text = if (app.tool_status) |tool|
+            std.fmt.bufPrint(&info_buf, " TOOL: {s} ", .{tool}) catch " TOOL "
+        else if (app.is_loading)
+            " THINKING "
+        else
+            " READY ";
+        res = win.printSegment(.{
+            .text = info_text,
+            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+        }, .{ .row_offset = status_row, .col_offset = res.col });
+
+        // Fill remainder
+        _ = win.printSegment(.{
+            .text = " ctrl+q: quit",
+            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+        }, .{ .row_offset = status_row, .col_offset = res.col });
 
         try vx.render(tty.writer());
         app.needs_redraw = false;
