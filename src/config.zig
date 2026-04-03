@@ -42,6 +42,20 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
     };
 }
 
+pub fn save(allocator: std.mem.Allocator, cfg: Config) !void {
+    const path = try configPath(allocator);
+    defer allocator.free(path);
+
+    const json = try std.json.Stringify.valueAlloc(allocator, cfg, .{ .whitespace = .indent_4 });
+    defer allocator.free(json);
+
+    const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(json);
+
+    log.info("saved config to {s}", .{path});
+}
+
 pub fn load(allocator: std.mem.Allocator) !std.json.Parsed(Config) {
     try ensureConfigExists(allocator);
 

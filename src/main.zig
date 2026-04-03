@@ -4,6 +4,7 @@ const agent = @import("agent");
 const App = @import("App.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
+const model_picker_mod = @import("model_picker.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -40,6 +41,9 @@ pub fn main() !void {
     };
     defer parsed_config.deinit();
     const config = parsed_config.value;
+
+    var model_picker = model_picker_mod.ModelPicker.init();
+    defer model_picker.deinit(alloc);
 
     var at_picker = at_picker_mod.AtPicker.init();
     defer at_picker.deinit(alloc);
@@ -101,10 +105,14 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     if (at_picker.active) {
                         at_picker.reset(alloc);
+                    } else if (model_picker.active) {
+                        model_picker.reset(alloc);
                     }
                 } else if (key.matches(vaxis.Key.up, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected > 0) at_picker.selected -= 1;
+                    } else if (model_picker.active) {
+                        if (model_picker.selected > 0) model_picker.selected -= 1;
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = 0;
                     } else if (!app.tool_confirmation.pending and history.items.len > 0) {
@@ -123,6 +131,9 @@ pub fn main() !void {
                     if (at_picker.active) {
                         if (at_picker.selected + 1 < at_picker.results.items.len)
                             at_picker.selected += 1;
+                    } else if (model_picker.active) {
+                        if (model_picker.selected + 1 < model_picker.results.items.len)
+                            model_picker.selected += 1;
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = 1;
                     } else if (!app.tool_confirmation.pending and history_idx != null) {
@@ -141,37 +152,13 @@ pub fn main() !void {
                     if (cursor_pos > 0) cursor_pos -= 1;
                 } else if (key.matches(vaxis.Key.right, .{})) {
                     if (cursor_pos < input.items.len) cursor_pos += 1;
-                } else if (key.matches('y', .{})) {
-                    if (app.tool_confirmation.pending) {
-                        app.mutex.lock();
-                        app.tool_confirmation.approved = true;
-                        app.tool_confirmation.pending = false;
-                        app.mutex.unlock();
-                        app.tool_confirmation.cond.signal();
-                    } else if (!app.is_loading) {
-                        try input.insertSlice(alloc, cursor_pos, "y");
-                        cursor_pos += 1;
-                    }
-                } else if (key.matches('n', .{})) {
-                    if (app.tool_confirmation.pending) {
-                        app.mutex.lock();
-                        var deny_buf: [256]u8 = undefined;
-                        const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else "edit";
-                        const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{
-                            action,
-                            app.tool_confirmation.file_path,
-                        }) catch "Permission denied";
-                        try app.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
-                        app.tool_confirmation.approved = false;
-                        app.tool_confirmation.pending = false;
-                        app.mutex.unlock();
-                        app.tool_confirmation.cond.signal();
-                    } else if (!app.is_loading) {
-                        try input.insertSlice(alloc, cursor_pos, "n");
-                        cursor_pos += 1;
-                    }
                 } else if (key.codepoint == 127 or key.codepoint == 8) {
-                    if (cursor_pos > 0) {
+                    if (model_picker.active) {
+                        if (model_picker.query.items.len > 0) {
+                            _ = model_picker.query.orderedRemove(model_picker.query.items.len - 1);
+                            try model_picker.refresh(alloc);
+                        }
+                    } else if (cursor_pos > 0) {
                         _ = input.orderedRemove(cursor_pos - 1);
                         cursor_pos -= 1;
                         if (at_picker.active) {
@@ -186,10 +173,12 @@ pub fn main() !void {
                         }
                     }
                 } else if (key.text) |txt| {
-                    if (txt.len > 0) {
+                    if (model_picker.active) {
+                        try model_picker.query.appendSlice(alloc, txt);
+                        try model_picker.refresh(alloc);
+                    } else if (txt.len > 0) {
                         try input.insertSlice(alloc, cursor_pos, txt);
                         cursor_pos += txt.len;
-
                         if (std.mem.eql(u8, txt, "@") and !at_picker.active) {
                             at_picker.active = true;
                             at_picker.at_start = cursor_pos - 1;
@@ -242,6 +231,19 @@ pub fn main() !void {
                         cursor_pos = at_picker.at_start + replacement.items.len;
 
                         at_picker.reset(alloc);
+                    } else if (model_picker.active and model_picker.results.items.len > 0) {
+                        const selected = model_picker.results.items[model_picker.selected];
+                        app.llm_client.config.model = selected.id;
+                        agent.config.save(alloc, .{
+                            .apiKey = config.apiKey,
+                            .baseUrl = config.baseUrl,
+                            .model = selected.id,
+                        }) catch {};
+                        model_picker.reset(alloc);
+                    } else if (std.mem.eql(u8, input.items, "/model")) {
+                        input.clearRetainingCapacity();
+                        cursor_pos = 0;
+                        try model_picker.open(alloc);
                     } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
 
@@ -557,6 +559,82 @@ pub fn main() !void {
             }
         }
 
+        // /model picker overlay
+        if (model_picker.active) {
+            const modal_w: u16 = @min(60, vx.screen.width -| 4);
+            const modal_h: u16 = @intCast(@min(model_picker.results.items.len + 5, 20));
+            const modal_x: u16 = (vx.screen.width -| modal_w) / 2;
+            const modal_y: u16 = (vx.screen.height -| modal_h) / 2;
+
+            const modal = win.child(.{
+                .x_off = modal_x,
+                .y_off = modal_y,
+                .width = modal_w,
+                .height = modal_h,
+                .border = .{ .where = .all, .glyphs = .single_rounded },
+            });
+
+            // Fill background
+            const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
+            var fr: u16 = 0;
+            while (fr < modal_h) : (fr += 1) {
+                var fc: u16 = 0;
+                while (fc < modal_w) : (fc += 1) {
+                    modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
+                }
+            }
+
+            // Title row
+            _ = modal.printSegment(.{
+                .text = " Select model",
+                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            }, .{ .row_offset = 0, .col_offset = 1 });
+            _ = modal.printSegment(.{
+                .text = "esc ",
+                .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
+
+            // Search field
+            const q = model_picker.query.items;
+            const search_text = if (q.len > 0) q else "Search...";
+            const search_style: vaxis.Style = if (q.len > 0)
+                .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } }
+            else
+                .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } };
+            _ = modal.printSegment(.{
+                .text = search_text,
+                .style = search_style,
+            }, .{ .row_offset = 1, .col_offset = 2 });
+
+            // Model list
+            for (model_picker.results.items, 0..) |m, idx| {
+                const mrow: u16 = @intCast(idx + 2);
+                if (mrow >= modal_h -| 1) break;
+                const is_sel = idx == model_picker.selected;
+                const bg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xC0, 0x70, 0x20 } } else .{ .index = 0 };
+                const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
+
+                if (is_sel) {
+                    var c: u16 = 1;
+                    while (c < modal_w -| 1) : (c += 1) {
+                        modal.writeCell(c, mrow, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
+                    }
+                }
+
+                _ = modal.printSegment(.{
+                    .text = m.display,
+                    .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
+                }, .{ .row_offset = mrow, .col_offset = 2 });
+
+                if (m.free) {
+                    _ = modal.printSegment(.{
+                        .text = "Free",
+                        .style = .{ .fg = .{ .rgb = .{ 0x60, 0xCC, 0x60 } }, .bg = bg },
+                    }, .{ .row_offset = mrow, .col_offset = modal_w -| 6 });
+                }
+            }
+        }
+
         const input_win = win.child(.{
             .x_off = 0,
             .y_off = input_y,
@@ -609,7 +687,7 @@ pub fn main() !void {
 
         // Model name — highlighted
         var res = win.printSegment(.{
-            .text = std.fmt.bufPrint(&status_buf, " {s} ", .{config.model}) catch " ? ",
+            .text = std.fmt.bufPrint(&status_buf, " {s} ", .{llm_client.config.model}) catch " ? ",
             .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = 0 });
 
