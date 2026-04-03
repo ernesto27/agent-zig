@@ -2,6 +2,8 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig");
+const chat_selection = @import("chat_selection.zig");
+const layout_mod = @import("layout.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
@@ -94,6 +96,8 @@ pub fn main() !void {
     var history_idx: ?usize = null;
     var draft = std.ArrayList(u8){};
     defer draft.deinit(alloc);
+    var selection: chat_selection.SelectionState = .{};
+    var clipboard_status: ?[]const u8 = null;
 
     while (running) {
         const event = loop.nextEvent();
@@ -287,6 +291,78 @@ pub fn main() !void {
                         scroll_offset += 3;
                     }
                     app.needs_redraw = true;
+                } else if (mouse.button == .left) {
+                    var mouse_arena = std.heap.ArenaAllocator.init(alloc);
+                    defer mouse_arena.deinit();
+
+                    app.mutex.lock();
+                    const layout = layout_mod.compute(vx.screen.height, &app);
+                    const rendered_lines = chat_selection.buildRenderedLines(&app, mouse_arena.allocator(), if (vx.screen.width > 0) vx.screen.width else 1, vx.screen.width_method) catch &.{};
+                    app.mutex.unlock();
+
+                    const chat_win = vx.window().child(.{
+                        .x_off = 0,
+                        .y_off = layout.chat_y,
+                        .width = vx.screen.width,
+                        .height = layout.chat_h_total,
+                        .border = .{ .where = .all, .glyphs = .single_rounded },
+                    });
+
+                    switch (mouse.type) {
+                        .press => {
+                            clipboard_status = null;
+                            if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                                selection.anchor = point;
+                                selection.focus = point;
+                                selection.dragging = true;
+                                app.needs_redraw = true;
+                            } else {
+                                const had_selection = selection.anchor != null or selection.focus != null;
+                                selection.clear();
+                                if (had_selection) app.needs_redraw = true;
+                            }
+                        },
+                        .drag => {
+                            if (selection.dragging) {
+                                if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                                    selection.focus = point;
+                                    app.needs_redraw = true;
+                                }
+                            }
+                        },
+                        .release => {
+                            if (selection.dragging) {
+                                selection.dragging = false;
+                                if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                                    selection.focus = point;
+                                }
+
+                                if (selection.bounds(rendered_lines)) |bounds| {
+                                    const copied = chat_selection.selectedText(alloc, rendered_lines, bounds, vx.screen.width_method) catch blk: {
+                                        clipboard_status = " copy failed ";
+                                        break :blk null;
+                                    };
+                                    if (copied) |text| {
+                                        defer alloc.free(text);
+                                        if (text.len == 0) {
+                                            clipboard_status = " nothing selected ";
+                                        } else {
+                                            vx.copyToSystemClipboard(tty.writer(), text, alloc) catch {
+                                                clipboard_status = " copy failed ";
+                                                app.needs_redraw = true;
+                                                break;
+                                            };
+                                            clipboard_status = " copied selection ";
+                                        }
+                                    }
+                                } else {
+                                    clipboard_status = " drag to copy ";
+                                }
+                                app.needs_redraw = true;
+                            }
+                        },
+                        else => {},
+                    }
                 }
             },
             .winsize => |ws| {
@@ -304,87 +380,29 @@ pub fn main() !void {
         var win = vx.window();
         win.clear();
 
+        var frame_arena = std.heap.ArenaAllocator.init(alloc);
+        defer frame_arena.deinit();
+
         // Header
         _ = win.printSegment(.{
             .text = " Zigent - AI Coding Agent ",
             .style = .{ .bg = .{ .rgb = .{ 0x30, 0x80, 0xD0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 0 });
 
-        // Layout constants
-        const input_box_h: u16 = 3; // top border + 1 content row + bottom border
-        const chat_y: u16 = 1;
-        const preview_h: u16 = if (app.tool_confirmation.pending) blk: {
-            const content_lines: usize = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file"))
-                std.mem.count(u8, app.tool_confirmation.content, "\n") + 1
-            else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "edit_file"))
-                std.mem.count(u8, app.tool_confirmation.old_string, "\n") +
-                    std.mem.count(u8, app.tool_confirmation.new_string, "\n") + 2
-            else
-                1; // bash: "Do you want to proceed?"
-            // title(1) + content + blank(2) + Yes/No(2) + bottom margin(1)
-            const needed: u16 = @intCast(@min(content_lines + 6, 20));
-            break :blk @max(needed, 8);
-        } else 0;
-        const chat_h_total: u16 = if (vx.screen.height > 1 + input_box_h + preview_h + 1) vx.screen.height - 1 - input_box_h - preview_h - 1 else 1;
-        const preview_y: u16 = chat_y + chat_h_total;
-        const input_y: u16 = preview_y + preview_h;
+        const layout = layout_mod.compute(vx.screen.height, &app);
 
         // Chat area
         const chat_win = win.child(.{
             .x_off = 0,
-            .y_off = chat_y,
+            .y_off = layout.chat_y,
             .width = vx.screen.width,
-            .height = chat_h_total,
+            .height = layout.chat_h_total,
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
         const chat_h = chat_win.height;
-
-        // Pre-compute all lines for scrolling
-        const LineEntry = union(enum) {
-            plain: struct { text: []const u8, prefix: []const u8, is_first: bool },
-            styled: agent.markdown.StyledLine,
-        };
-        const max_total_lines = 2048;
-        var all_lines: [max_total_lines]LineEntry = undefined;
-        var total_lines: usize = 0;
-
-        for (app.messages.items) |*msg| {
-            if (msg.role == .assistant) {
-                // AI label
-                if (total_lines < max_total_lines) {
-                    all_lines[total_lines] = .{ .plain = .{
-                        .text = "",
-                        .prefix = "AI: ",
-                        .is_first = true,
-                    } };
-                    total_lines += 1;
-                }
-                // Styled markdown lines
-                const styled = app.getStyledLines(msg) catch &.{};
-                for (styled) |sline| {
-                    if (total_lines >= max_total_lines) break;
-                    all_lines[total_lines] = .{ .styled = sline };
-                    total_lines += 1;
-                }
-            } else {
-                // User messages — plain text
-                const prefix = "You: ";
-                const prefix_len = @as(u16, @intCast(prefix.len));
-                const user_wrap_w = if (chat_win.width > prefix_len + 3) chat_win.width - prefix_len - 3 else 10;
-                const wrapped = ui.wrapText(msg.content, user_wrap_w, 512);
-                for (wrapped, 0..) |maybe_line, li| {
-                    const line = maybe_line orelse break;
-                    if (total_lines >= max_total_lines) break;
-                    all_lines[total_lines] = .{ .plain = .{
-                        .text = line,
-                        .prefix = prefix,
-                        .is_first = li == 0,
-                    } };
-                    total_lines += 1;
-                }
-            }
-        }
+        const rendered_lines = chat_selection.buildRenderedLines(&app, frame_arena.allocator(), chat_win.width, vx.screen.width_method) catch &.{};
+        const total_lines = rendered_lines.len;
 
         // Clamp scroll_offset and handle auto-scroll
         const max_scroll = if (total_lines > chat_h) total_lines - chat_h else 0;
@@ -397,9 +415,9 @@ pub fn main() !void {
 
         var row: u16 = 0;
         const start = if (scroll_offset < total_lines) scroll_offset else 0;
-        for (all_lines[start..total_lines]) |entry| {
+        for (rendered_lines[start..total_lines]) |line| {
             if (row >= chat_h) break;
-            switch (entry) {
+            switch (line.entry) {
                 .plain => |p| {
                     if (p.is_first) {
                         const color: [3]u8 = if (std.mem.eql(u8, p.prefix, "AI: ")) .{ 0x60, 0xA0, 0xF0 } else .{ 0x60, 0xD0, 0x60 };
@@ -440,6 +458,19 @@ pub fn main() !void {
             row += 1;
         }
 
+        if (selection.bounds(rendered_lines)) |bounds| {
+            var visible_row: usize = 0;
+            var line_idx = start;
+            while (visible_row < chat_h and line_idx < rendered_lines.len) : ({
+                visible_row += 1;
+                line_idx += 1;
+            }) {
+                const line = rendered_lines[line_idx];
+                const range = chat_selection.selectionRangeForLine(bounds, line_idx, line.display_cols) orelse continue;
+                chat_selection.applySelectionHighlight(chat_win, @intCast(visible_row), line, range);
+            }
+        }
+
         // Input box with border
         // Preview panel
         if (app.tool_confirmation.pending) {
@@ -447,9 +478,9 @@ pub fn main() !void {
             const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
             const preview_win = win.child(.{
                 .x_off = 0,
-                .y_off = preview_y,
+                .y_off = layout.preview_y,
                 .width = vx.screen.width,
-                .height = preview_h,
+                .height = layout.preview_h,
                 .border = .{ .where = .all, .glyphs = .single_rounded },
             });
             var title_buf: [256]u8 = undefined;
@@ -536,7 +567,7 @@ pub fn main() !void {
         if (at_picker.active and at_picker.results.items.len > 0) {
             const n: u16 = @intCast(@min(at_picker.results.items.len, at_picker_mod.MAX_RESULTS));
             const picker_h: u16 = n + 2; // +2 for border
-            const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;
+            const picker_y: u16 = if (layout.input_y >= picker_h) layout.input_y - picker_h else 0;
             const picker_win = win.child(.{
                 .x_off = 0,
                 .y_off = picker_y,
@@ -637,9 +668,9 @@ pub fn main() !void {
 
         const input_win = win.child(.{
             .x_off = 0,
-            .y_off = input_y,
+            .y_off = layout.input_y,
             .width = vx.screen.width,
-            .height = input_box_h,
+            .height = 3,
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
@@ -704,9 +735,13 @@ pub fn main() !void {
             .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
 
-        // Fill remainder
+        var footer_buf: [128]u8 = undefined;
+        const footer_text = if (clipboard_status) |status|
+            std.fmt.bufPrint(&footer_buf, "{s}  ctrl+q: quit", .{status}) catch " ctrl+q: quit"
+        else
+            " ctrl+q: quit";
         _ = win.printSegment(.{
-            .text = " ctrl+q: quit",
+            .text = footer_text,
             .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
 
