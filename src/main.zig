@@ -6,6 +6,7 @@ const chat_selection = @import("chat_selection.zig");
 const layout_mod = @import("layout.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
+const command_picker_mod = @import("command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 
@@ -30,6 +31,23 @@ fn logToFile(
     f.writeAll(msg) catch {};
 }
 
+fn runSlashCommand(
+    alloc: std.mem.Allocator,
+    action: command_picker_mod.CommandAction,
+    input: *std.ArrayList(u8),
+    cursor_pos: *usize,
+    model_picker: *model_picker_mod.ModelPicker,
+    provider_picker: *provider_picker_mod.ProviderPicker,
+) !void {
+    input.clearRetainingCapacity();
+    cursor_pos.* = 0;
+
+    switch (action) {
+        .provider => provider_picker.open(),
+        .model => try model_picker.open(alloc),
+    }
+}
+
 pub fn main() !void {
     log_file = try std.fs.cwd().createFile("agent.log", .{ .truncate = true });
     defer log_file.?.close();
@@ -50,6 +68,9 @@ pub fn main() !void {
 
     var provider_picker = provider_picker_mod.ProviderPicker.init();
     defer provider_picker.deinit(alloc);
+
+    var command_picker = command_picker_mod.CommandPicker.init();
+    defer command_picker.deinit(alloc);
 
     var at_picker = at_picker_mod.AtPicker.init();
     defer at_picker.deinit(alloc);
@@ -113,6 +134,8 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     if (at_picker.active) {
                         at_picker.reset(alloc);
+                    } else if (command_picker.active) {
+                        command_picker.reset(alloc);
                     } else if (model_picker.active) {
                         model_picker.reset(alloc);
                     } else if (provider_picker.active) {
@@ -121,6 +144,8 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.up, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected > 0) at_picker.selected -= 1;
+                    } else if (command_picker.active) {
+                        if (command_picker.selected > 0) command_picker.selected -= 1;
                     } else if (model_picker.active) {
                         if (model_picker.selected > 0) model_picker.selected -= 1;
                     } else if (provider_picker.active and provider_picker.phase == .list) {
@@ -138,11 +163,15 @@ pub fn main() !void {
                         input.clearRetainingCapacity();
                         try input.appendSlice(alloc, history.items[history_idx.?]);
                         cursor_pos = input.items.len;
+                        try command_picker.updateFromInput(alloc, input.items);
                     }
                 } else if (key.matches(vaxis.Key.down, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected + 1 < at_picker.results.items.len)
                             at_picker.selected += 1;
+                    } else if (command_picker.active) {
+                        if (command_picker.selected + 1 < command_picker.results.items.len)
+                            command_picker.selected += 1;
                     } else if (model_picker.active) {
                         if (model_picker.selected + 1 < model_picker.results.items.len)
                             model_picker.selected += 1;
@@ -162,6 +191,7 @@ pub fn main() !void {
                             try input.appendSlice(alloc, draft.items);
                         }
                         cursor_pos = input.items.len;
+                        try command_picker.updateFromInput(alloc, input.items);
                     }
                 } else if (key.matches(vaxis.Key.left, .{})) {
                     if (cursor_pos > 0) cursor_pos -= 1;
@@ -189,6 +219,7 @@ pub fn main() !void {
                                 try at_picker.refresh(alloc);
                             }
                         }
+                        try command_picker.updateFromInput(alloc, input.items);
                     }
                 } else if (key.text) |txt| {
                     if (provider_picker.active and provider_picker.phase == .key_input) {
@@ -209,6 +240,7 @@ pub fn main() !void {
                             try at_picker.query.appendSlice(alloc, after_at);
                             try at_picker.refresh(alloc);
                         }
+                        try command_picker.updateFromInput(alloc, input.items);
                     }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (app.tool_confirmation.pending) {
@@ -229,6 +261,11 @@ pub fn main() !void {
                             app.mutex.unlock();
                             app.tool_confirmation.cond.signal();
                         }
+                    } else if (command_picker.active) {
+                        if (command_picker.selectedCommand()) |command| {
+                            try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker);
+                        }
+                        command_picker.reset(alloc);
                     } else if (at_picker.active and at_picker.results.items.len > 0) {
                         // Confirm file selection — do NOT submit message
                         const picked_path = at_picker.results.items[at_picker.selected];
@@ -273,14 +310,6 @@ pub fn main() !void {
                             }) catch {};
                         }
                         provider_picker.reset(alloc);
-                    } else if (std.mem.eql(u8, input.items, "/provider")) {
-                        input.clearRetainingCapacity();
-                        cursor_pos = 0;
-                        provider_picker.open();
-                    } else if (std.mem.eql(u8, input.items, "/model")) {
-                        input.clearRetainingCapacity();
-                        cursor_pos = 0;
-                        try model_picker.open(alloc);
                     } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
 
@@ -621,6 +650,10 @@ pub fn main() !void {
                 const res = picker_win.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = picker_row, .col_offset = 0 });
                 _ = picker_win.printSegment(.{ .text = path, .style = style }, .{ .row_offset = picker_row, .col_offset = res.col });
             }
+        }
+
+        if (command_picker.active and command_picker.results.items.len > 0) {
+            command_picker.render(win, vx.screen.width, layout.input_y);
         }
 
         // /model picker overlay
