@@ -167,16 +167,9 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     const arena_alloc = arena.allocator();
     const tool_defs = agent.tools.getDefinitions(arena_alloc) catch &.{};
 
-    // 3. Agentic loop — keep all parsed responses alive until loop ends so that
-    //    content_blocks stored in llm_history can safely reference their JSON arenas.
-    var responses = std.ArrayList(std.json.Parsed(agent.llm.message.MessagesResponse)){};
-    defer {
-        for (responses.items) |*r| r.deinit();
-        responses.deinit(alloc);
-    }
-
     const max_iterations = 10;
     var iteration: usize = 0;
+    var stream_ctx = StreamCtx{ .app = self, .loop = loop };
 
     while (iteration < max_iterations) : (iteration += 1) {
         log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.llm_history.items.len });
@@ -197,9 +190,8 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
         }
 
-        // Call LLM (non-streaming)
-        const resp = self.llm_client.sendMessage(alloc, self.llm_history.items, tool_defs) catch |err| {
-            log.err("sendMessage failed: {}", .{err});
+        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk) catch |err| {
+            log.err("sendMessageStreaming failed: {}", .{err});
             self.mutex.lock();
             defer self.mutex.unlock();
             if (self.messages.items.len > 0) {
@@ -211,13 +203,9 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
             break;
         };
-        responses.append(alloc, resp) catch {
-            resp.deinit();
-            break;
-        };
-        const resp_ref = &responses.items[responses.items.len - 1];
+        defer resp.deinit();
 
-        const response = resp_ref.value;
+        const response = resp.value;
         log.info("--- RESPONSE stop_reason={s} tokens={d}in/{d}out ---", .{
             response.stop_reason orelse "null",
             response.usage.input_tokens,
@@ -249,21 +237,6 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
                     .input = block.input,
                 }) catch {};
             }
-        }
-
-        // Update display with any text
-        if (text_buf.items.len > 0) {
-            self.mutex.lock();
-            if (self.messages.items.len > 0) {
-                const last = &self.messages.items[self.messages.items.len - 1];
-                const sep: []const u8 = if (last.content.len > 0 and last.content[last.content.len - 1] != '\n') "\n" else "";
-                const new_content = std.mem.concat(alloc, u8, &.{ last.content, sep, text_buf.items }) catch last.content;
-                if (new_content.ptr != last.content.ptr) alloc.free(last.content);
-                last.content = new_content;
-            }
-            self.needs_redraw = true;
-            self.mutex.unlock();
-            wakeLoop(loop);
         }
 
         // Check stop reason
