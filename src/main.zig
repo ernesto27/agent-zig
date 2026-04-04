@@ -7,6 +7,7 @@ const layout_mod = @import("layout.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
+const provider_picker_mod = @import("provider_picker.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -46,6 +47,9 @@ pub fn main() !void {
 
     var model_picker = model_picker_mod.ModelPicker.init();
     defer model_picker.deinit(alloc);
+
+    var provider_picker = provider_picker_mod.ProviderPicker.init();
+    defer provider_picker.deinit(alloc);
 
     var at_picker = at_picker_mod.AtPicker.init();
     defer at_picker.deinit(alloc);
@@ -111,12 +115,16 @@ pub fn main() !void {
                         at_picker.reset(alloc);
                     } else if (model_picker.active) {
                         model_picker.reset(alloc);
+                    } else if (provider_picker.active) {
+                        provider_picker.reset(alloc);
                     }
                 } else if (key.matches(vaxis.Key.up, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected > 0) at_picker.selected -= 1;
                     } else if (model_picker.active) {
                         if (model_picker.selected > 0) model_picker.selected -= 1;
+                    } else if (provider_picker.active and provider_picker.phase == .list) {
+                        if (provider_picker.selected > 0) provider_picker.selected -= 1;
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = 0;
                     } else if (!app.tool_confirmation.pending and history.items.len > 0) {
@@ -138,6 +146,9 @@ pub fn main() !void {
                     } else if (model_picker.active) {
                         if (model_picker.selected + 1 < model_picker.results.items.len)
                             model_picker.selected += 1;
+                    } else if (provider_picker.active and provider_picker.phase == .list) {
+                        if (provider_picker.selected + 1 < model_picker_mod.providers.len)
+                            provider_picker.selected += 1;
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = 1;
                     } else if (!app.tool_confirmation.pending and history_idx != null) {
@@ -157,7 +168,10 @@ pub fn main() !void {
                 } else if (key.matches(vaxis.Key.right, .{})) {
                     if (cursor_pos < input.items.len) cursor_pos += 1;
                 } else if (key.codepoint == 127 or key.codepoint == 8) {
-                    if (model_picker.active) {
+                    if (provider_picker.active and provider_picker.phase == .key_input) {
+                        if (provider_picker.key_input.items.len > 0)
+                            _ = provider_picker.key_input.orderedRemove(provider_picker.key_input.items.len - 1);
+                    } else if (model_picker.active) {
                         if (model_picker.query.items.len > 0) {
                             _ = model_picker.query.orderedRemove(model_picker.query.items.len - 1);
                             try model_picker.refresh(alloc);
@@ -177,7 +191,9 @@ pub fn main() !void {
                         }
                     }
                 } else if (key.text) |txt| {
-                    if (model_picker.active) {
+                    if (provider_picker.active and provider_picker.phase == .key_input) {
+                        try provider_picker.key_input.appendSlice(alloc, txt);
+                    } else if (model_picker.active) {
                         try model_picker.query.appendSlice(alloc, txt);
                         try model_picker.refresh(alloc);
                     } else if (txt.len > 0) {
@@ -244,6 +260,23 @@ pub fn main() !void {
                             .model = selected.id,
                         }) catch {};
                         model_picker.reset(alloc);
+                    } else if (provider_picker.active and provider_picker.phase == .list) {
+                        provider_picker.phase = .key_input;
+                    } else if (provider_picker.active and provider_picker.phase == .key_input) {
+                        if (provider_picker.key_input.items.len > 0) {
+                            const new_key = provider_picker.key_input.items;
+                            app.llm_client.config.api_key = new_key;
+                            agent.config.save(alloc, .{
+                                .apiKey = new_key,
+                                .baseUrl = config.baseUrl,
+                                .model = config.model,
+                            }) catch {};
+                        }
+                        provider_picker.reset(alloc);
+                    } else if (std.mem.eql(u8, input.items, "/provider")) {
+                        input.clearRetainingCapacity();
+                        cursor_pos = 0;
+                        provider_picker.open();
                     } else if (std.mem.eql(u8, input.items, "/model")) {
                         input.clearRetainingCapacity();
                         cursor_pos = 0;
@@ -493,7 +526,8 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true, .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } } },
             }, .{ .row_offset = 0, .col_offset = 1 });
 
-            const preview_content_h = if (preview_win.height > 1) preview_win.height - 1 else 0;
+            const sel_row = preview_win.height -| 3;
+            const preview_content_end = sel_row;
 
             if (is_bash) {
                 _ = preview_win.printSegment(.{
@@ -505,7 +539,7 @@ pub fn main() !void {
                 var line_idx: usize = 0;
                 var prow: u16 = 1;
                 while (line_iter.next()) |line| {
-                    if (prow >= preview_content_h) break;
+                    if (prow >= preview_content_end) break;
                     if (line_idx >= preview_scroll) {
                         _ = preview_win.printSegment(.{
                             .text = line,
@@ -520,7 +554,7 @@ pub fn main() !void {
                 var line_idx: usize = 0;
                 var old_iter = std.mem.splitScalar(u8, app.tool_confirmation.old_string, '\n');
                 while (old_iter.next()) |line| {
-                    if (prow >= preview_content_h) break;
+                    if (prow >= preview_content_end) break;
                     if (line_idx >= preview_scroll) {
                         var diff_buf: [512]u8 = undefined;
                         const diff_line = std.fmt.bufPrint(&diff_buf, "- {s}", .{line}) catch line;
@@ -534,7 +568,7 @@ pub fn main() !void {
                 }
                 var new_iter = std.mem.splitScalar(u8, app.tool_confirmation.new_string, '\n');
                 while (new_iter.next()) |line| {
-                    if (prow >= preview_content_h) break;
+                    if (prow >= preview_content_end) break;
                     if (line_idx >= preview_scroll) {
                         var diff_buf: [512]u8 = undefined;
                         const diff_line = std.fmt.bufPrint(&diff_buf, "+ {s}", .{line}) catch line;
@@ -549,7 +583,6 @@ pub fn main() !void {
             }
 
             // Shared Yes/No selector at the bottom of the preview panel
-            const sel_row = preview_win.height -| 3;
             const yes_selected = app.tool_confirmation.cursor == 0;
             _ = preview_win.printSegment(.{
                 .text = if (yes_selected) " ❯ 1. Yes" else "   1. Yes",
@@ -592,78 +625,12 @@ pub fn main() !void {
 
         // /model picker overlay
         if (model_picker.active) {
-            const modal_w: u16 = @min(60, vx.screen.width -| 4);
-            const modal_h: u16 = @intCast(@min(model_picker.results.items.len + 5, 20));
-            const modal_x: u16 = (vx.screen.width -| modal_w) / 2;
-            const modal_y: u16 = (vx.screen.height -| modal_h) / 2;
+            model_picker.render(win, vx.screen.width, vx.screen.height);
+        }
 
-            const modal = win.child(.{
-                .x_off = modal_x,
-                .y_off = modal_y,
-                .width = modal_w,
-                .height = modal_h,
-                .border = .{ .where = .all, .glyphs = .single_rounded },
-            });
-
-            // Fill background
-            const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
-            var fr: u16 = 0;
-            while (fr < modal_h) : (fr += 1) {
-                var fc: u16 = 0;
-                while (fc < modal_w) : (fc += 1) {
-                    modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
-                }
-            }
-
-            // Title row
-            _ = modal.printSegment(.{
-                .text = " Select model",
-                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-            }, .{ .row_offset = 0, .col_offset = 1 });
-            _ = modal.printSegment(.{
-                .text = "esc ",
-                .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
-            }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
-
-            // Search field
-            const q = model_picker.query.items;
-            const search_text = if (q.len > 0) q else "Search...";
-            const search_style: vaxis.Style = if (q.len > 0)
-                .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } }
-            else
-                .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } };
-            _ = modal.printSegment(.{
-                .text = search_text,
-                .style = search_style,
-            }, .{ .row_offset = 1, .col_offset = 2 });
-
-            // Model list
-            for (model_picker.results.items, 0..) |m, idx| {
-                const mrow: u16 = @intCast(idx + 2);
-                if (mrow >= modal_h -| 1) break;
-                const is_sel = idx == model_picker.selected;
-                const bg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xC0, 0x70, 0x20 } } else .{ .index = 0 };
-                const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
-
-                if (is_sel) {
-                    var c: u16 = 1;
-                    while (c < modal_w -| 1) : (c += 1) {
-                        modal.writeCell(c, mrow, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
-                    }
-                }
-
-                _ = modal.printSegment(.{
-                    .text = m.display,
-                    .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
-                }, .{ .row_offset = mrow, .col_offset = 2 });
-
-                if (m.free) {
-                    _ = modal.printSegment(.{
-                        .text = "Free",
-                        .style = .{ .fg = .{ .rgb = .{ 0x60, 0xCC, 0x60 } }, .bg = bg },
-                    }, .{ .row_offset = mrow, .col_offset = modal_w -| 6 });
-                }
-            }
+        // /provider picker overlay
+        if (provider_picker.active) {
+            provider_picker.render(win, vx.screen.width, vx.screen.height);
         }
 
         const input_win = win.child(.{
