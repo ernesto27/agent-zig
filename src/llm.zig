@@ -1,5 +1,6 @@
 pub const client = @import("llm/client.zig");
 pub const message = @import("llm/message.zig");
+pub const providers = @import("llm/providers.zig");
 pub const Client = client.Client;
 pub const Config = client.Config;
 pub const Message = message.Message;

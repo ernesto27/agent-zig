@@ -131,8 +131,11 @@ pub fn main() !void {
             .key_press => |key| {
                 if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
                     running = false;
-                } else if (key.matches('t', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
-                    llm_client.config.effort = llm_client.config.effort.next();
+                } else if (key.matches('t', .{ .ctrl = true })) {
+                    const model = model_picker_mod.findModel(llm_client.config.model);
+                    if (model != null and model.?.supports_thinking) {
+                        llm_client.config.effort = llm_client.config.effort.next();
+                    }
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     if (at_picker.active) {
                         at_picker.reset(alloc);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const message = @import("message.zig");
+const providers = @import("providers.zig");
 
 const log = std.log.scoped(.llm);
 
@@ -122,11 +123,13 @@ pub const Client = struct {
         messages: []const message.Message,
         tools: []const message.ToolDefinition,
     ) !std.json.Parsed(message.MessagesResponse) {
+        const model_info = providers.findModel(self.config.model);
         const req = message.MessagesRequest{
             .model = self.config.model,
             .messages = messages,
             .tools = tools,
             .effort = self.config.effort,
+            .supports_thinking = model_info != null and model_info.?.supports_thinking,
         };
 
         const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
@@ -186,12 +189,14 @@ pub const Client = struct {
         on_chunk: *const fn (*anyopaque, []const u8) void,
         on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
     ) !std.json.Parsed(message.MessagesResponse) {
+        const model_info = providers.findModel(self.config.model);
         const req_body = message.MessagesRequest{
             .model = self.config.model,
             .messages = messages,
             .stream = true,
             .tools = tools,
             .effort = self.config.effort,
+            .supports_thinking = model_info != null and model_info.?.supports_thinking,
         };
         const body = try std.json.Stringify.valueAlloc(allocator, req_body, .{});
         defer allocator.free(body);

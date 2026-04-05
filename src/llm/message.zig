@@ -68,6 +68,7 @@ pub const MessagesRequest = struct {
     stream: bool = false,
     tools: []const ToolDefinition = &.{},
     effort: Effort = .none,
+    supports_thinking: bool = false,
 
     /// Custom serializer: omit tools when empty, omit stream when false
     pub fn jsonStringify(self: MessagesRequest, jw: anytype) !void {
@@ -87,7 +88,7 @@ pub const MessagesRequest = struct {
             try jw.write(self.tools);
         }
 
-        if (self.effort != .none) {
+        if (self.effort != .none and self.supports_thinking) {
             try jw.objectField("thinking");
             try jw.beginObject();
             try jw.objectField("type");

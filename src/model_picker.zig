@@ -1,36 +1,14 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const agent = @import("agent");
 
-pub const Model = struct {
-    id: []const u8,
-    display: []const u8,
-    free: bool = false,
-};
+const p = agent.llm.providers;
 
-pub const Provider = struct {
-    name: []const u8,
-    models: []const Model,
-};
-
-pub const providers = [_]Provider{
-    .{
-        .name = "Anthropic",
-        .models = &[_]Model{
-            .{ .id = "claude-opus-4-6", .display = "Claude Opus 4.6" },
-            .{ .id = "claude-sonnet-4-6", .display = "Claude Sonnet 4.6" },
-            .{ .id = "claude-haiku-4-5-20251001", .display = "Claude Haiku 4.5" },
-        },
-    },
-    .{
-        .name = "OpenAI",
-        .models = &[_]Model{
-            .{ .id = "gpt-4o", .display = "GPT-4o" },
-            .{ .id = "gpt-4o-mini", .display = "GPT-4o Mini" },
-            .{ .id = "o3", .display = "o3" },
-            .{ .id = "o4-mini", .display = "o4 Mini" },
-        },
-    },
-};
+// Re-export data types so existing callers don't need to change imports
+pub const Model = p.Model;
+pub const Provider = p.Provider;
+pub const providers = p.providers;
+pub const findModel = p.findModel;
 
 pub const ModelPicker = struct {
     active: bool = false,
@@ -51,8 +29,8 @@ pub const ModelPicker = struct {
         self.results.clearRetainingCapacity();
         self.selected = 0;
 
-        for (&providers) |*p| {
-            for (p.models) |*m| {
+        for (&p.providers) |*prov| {
+            for (prov.models) |*m| {
                 if (self.query.items.len == 0) {
                     try self.results.append(alloc, m);
                 } else {
