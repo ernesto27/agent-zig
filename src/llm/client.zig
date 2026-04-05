@@ -7,6 +7,7 @@ pub const Config = struct {
     base_url: []const u8,
     api_key: []const u8,
     model: []const u8,
+    effort: message.Effort = .none,
 };
 
 const anthropic_version = "2023-06-01";
@@ -14,6 +15,7 @@ const anthropic_version = "2023-06-01";
 const StreamBlockType = enum {
     text,
     tool_use,
+    thinking,
 };
 
 const StreamBlock = struct {
@@ -22,6 +24,7 @@ const StreamBlock = struct {
     id: ?[]u8 = null,
     name: ?[]u8 = null,
     input_json: std.ArrayList(u8) = .{},
+    signature: std.ArrayList(u8) = .{},
 
     fn init(block_type: StreamBlockType) StreamBlock {
         return .{ .block_type = block_type };
@@ -30,6 +33,7 @@ const StreamBlock = struct {
     fn deinit(self: *StreamBlock, allocator: std.mem.Allocator) void {
         self.text.deinit(allocator);
         self.input_json.deinit(allocator);
+        self.signature.deinit(allocator);
         if (self.id) |id| allocator.free(id);
         if (self.name) |name| allocator.free(name);
     }
@@ -122,6 +126,7 @@ pub const Client = struct {
             .model = self.config.model,
             .messages = messages,
             .tools = tools,
+            .effort = self.config.effort,
         };
 
         const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
@@ -169,8 +174,9 @@ pub const Client = struct {
         );
     }
 
-    /// Send messages with streaming. Calls `on_chunk(ctx, text)` for each text token.
-    /// The text slice is only valid during the callback — copy it if needed.
+    /// Send messages with streaming. Calls `on_chunk(ctx, text)` for each text token
+    /// and `on_thinking_chunk(ctx, text)` for each thinking token.
+    /// The text slices are only valid during the callback — copy them if needed.
     pub fn sendMessageStreaming(
         self: *Client,
         allocator: std.mem.Allocator,
@@ -178,12 +184,14 @@ pub const Client = struct {
         tools: []const message.ToolDefinition,
         ctx: *anyopaque,
         on_chunk: *const fn (*anyopaque, []const u8) void,
+        on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
     ) !std.json.Parsed(message.MessagesResponse) {
         const req_body = message.MessagesRequest{
             .model = self.config.model,
             .messages = messages,
             .stream = true,
             .tools = tools,
+            .effort = self.config.effort,
         };
         const body = try std.json.Stringify.valueAlloc(allocator, req_body, .{});
         defer allocator.free(body);
@@ -223,7 +231,17 @@ pub const Client = struct {
         log.info("response status: {d}", .{@intFromEnum(response.head.status)});
 
         if (response.head.status != .ok) {
-            log.err("request failed with status {d}", .{@intFromEnum(response.head.status)});
+            var err_buf: [4096]u8 = undefined;
+            var err_transfer_buf: [4096]u8 = undefined;
+            const err_reader = response.reader(&err_transfer_buf);
+            var err_pos: usize = 0;
+            while (err_reader.takeDelimiter('\n') catch null) |line| {
+                if (err_pos + line.len < err_buf.len) {
+                    @memcpy(err_buf[err_pos..][0..line.len], line);
+                    err_pos += line.len;
+                } else break;
+            }
+            log.err("request failed with status {d}: {s}", .{ @intFromEnum(response.head.status), err_buf[0..err_pos] });
             return error.HttpRequestFailed;
         }
 
@@ -233,7 +251,7 @@ pub const Client = struct {
         var stream = StreamAccumulator.init(allocator);
         defer stream.deinit();
 
-        try parseSseStream(allocator, body_reader, &stream, ctx, on_chunk);
+        try parseSseStream(allocator, body_reader, &stream, ctx, on_chunk, on_thinking_chunk);
 
         const response_bytes = try buildStreamedResponseJson(allocator, &stream);
         defer allocator.free(response_bytes);
@@ -261,6 +279,7 @@ fn parseSseStream(
     stream: *StreamAccumulator,
     ctx: *anyopaque,
     on_chunk: *const fn (*anyopaque, []const u8) void,
+    on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
 ) !void {
     // event_name is copied into this buffer so it survives the next reader call
     var event_name_buf: [64]u8 = undefined;
@@ -276,7 +295,7 @@ fn parseSseStream(
         if (trimmed.len == 0) {
             const event_name = event_name_buf[0..event_name_len];
             if (event_name.len > 0) {
-                try handleSseEvent(allocator, stream, event_name, data_buf.items, ctx, on_chunk);
+                try handleSseEvent(allocator, stream, event_name, data_buf.items, ctx, on_chunk, on_thinking_chunk);
             }
             if (std.mem.eql(u8, event_name, "message_stop")) {
                 break;
@@ -308,6 +327,7 @@ fn handleSseEvent(
     data: []const u8,
     ctx: *anyopaque,
     on_chunk: *const fn (*anyopaque, []const u8) void,
+    on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
 ) !void {
     if (data.len == 0) return;
 
@@ -343,7 +363,7 @@ fn handleSseEvent(
         const index = getU64Field(root, "index") orelse return;
         const block_obj = getObjectField(root, "content_block") orelse return;
         const block_type = getStringField(block_obj, "type") orelse return;
-        const block_kind: StreamBlockType = if (std.mem.eql(u8, block_type, "tool_use")) .tool_use else .text;
+        const block_kind: StreamBlockType = if (std.mem.eql(u8, block_type, "tool_use")) .tool_use else if (std.mem.eql(u8, block_type, "thinking")) .thinking else .text;
         const block = try stream.initBlockAt(index, block_kind);
 
         if (block_kind == .text) {
@@ -372,6 +392,19 @@ fn handleSseEvent(
             const text = getStringField(delta_obj, "text") orelse return;
             try block.text.appendSlice(allocator, text);
             if (text.len > 0) on_chunk(ctx, text);
+            return;
+        }
+
+        if (std.mem.eql(u8, delta_type, "thinking_delta")) {
+            const text = getStringField(delta_obj, "thinking") orelse return;
+            try block.text.appendSlice(allocator, text);
+            if (text.len > 0) on_thinking_chunk(ctx, text);
+            return;
+        }
+
+        if (std.mem.eql(u8, delta_type, "signature_delta")) {
+            const sig = getStringField(delta_obj, "signature") orelse return;
+            try block.signature.appendSlice(allocator, sig);
             return;
         }
 
@@ -451,13 +484,25 @@ fn buildStreamedResponseJson(allocator: std.mem.Allocator, stream: *const Stream
         if (idx > 0) try out.append(allocator, ',');
         try out.append(allocator, '{');
         try appendObjectFieldName(allocator, &out, "type");
-        try appendJsonString(allocator, &out, if (block.block_type == .tool_use) "tool_use" else "text");
+        try appendJsonString(allocator, &out, switch (block.block_type) {
+            .text => "text",
+            .tool_use => "tool_use",
+            .thinking => "thinking",
+        });
 
         switch (block.block_type) {
             .text => {
                 try out.append(allocator, ',');
                 try appendObjectFieldName(allocator, &out, "text");
                 try appendJsonString(allocator, &out, block.text.items);
+            },
+            .thinking => {
+                try out.append(allocator, ',');
+                try appendObjectFieldName(allocator, &out, "thinking");
+                try appendJsonString(allocator, &out, block.text.items);
+                try out.append(allocator, ',');
+                try appendObjectFieldName(allocator, &out, "signature");
+                try appendJsonString(allocator, &out, block.signature.items);
             },
             .tool_use => {
                 try out.append(allocator, ',');

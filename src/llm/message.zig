@@ -1,6 +1,32 @@
 const std = @import("std");
 
-// === Request Types ===
+pub const Effort = enum {
+    none,
+    low,
+    medium,
+    high,
+    max,
+
+    pub fn next(self: Effort) Effort {
+        return switch (self) {
+            .none => .low,
+            .low => .medium,
+            .medium => .high,
+            .high => .max,
+            .max => .none,
+        };
+    }
+
+    pub fn label(self: Effort) []const u8 {
+        return switch (self) {
+            .none => "off",
+            .low => "low",
+            .medium => "medium",
+            .high => "high",
+            .max => "max",
+        };
+    }
+};
 
 pub const Role = enum {
     user,
@@ -41,6 +67,7 @@ pub const MessagesRequest = struct {
     max_tokens: u32 = 8096,
     stream: bool = false,
     tools: []const ToolDefinition = &.{},
+    effort: Effort = .none,
 
     /// Custom serializer: omit tools when empty, omit stream when false
     pub fn jsonStringify(self: MessagesRequest, jw: anytype) !void {
@@ -58,6 +85,19 @@ pub const MessagesRequest = struct {
         if (self.tools.len > 0) {
             try jw.objectField("tools");
             try jw.write(self.tools);
+        }
+
+        if (self.effort != .none) {
+            try jw.objectField("thinking");
+            try jw.beginObject();
+            try jw.objectField("type");
+            try jw.write("adaptive");
+            try jw.endObject();
+            try jw.objectField("output_config");
+            try jw.beginObject();
+            try jw.objectField("effort");
+            try jw.write(self.effort.label());
+            try jw.endObject();
         }
         try jw.endObject();
     }
@@ -89,31 +129,45 @@ pub const ToolResultBlock = struct {
 pub const ContentBlock = struct {
     type: []const u8,
     text: ?[]const u8 = null,
+    // thinking block fields
+    thinking: ?[]const u8 = null,
+    signature: ?[]const u8 = null,
     // tool_use block fields
     id: ?[]const u8 = null,
     name: ?[]const u8 = null,
     input: std.json.Value = .null,
 
-    /// Only serialize fields relevant to the block type (text vs tool_use)
+    /// Only serialize fields relevant to the block type
     pub fn jsonStringify(self: ContentBlock, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("type");
         try jw.write(self.type);
-        if (self.text) |t| {
-            try jw.objectField("text");
-            try jw.write(t);
-        }
-        if (self.id) |id| {
-            try jw.objectField("id");
-            try jw.write(id);
-        }
-        if (self.name) |n| {
-            try jw.objectField("name");
-            try jw.write(n);
-        }
-        if (self.input != .null) {
-            try jw.objectField("input");
-            try jw.write(self.input);
+        if (std.mem.eql(u8, self.type, "thinking")) {
+            if (self.thinking) |t| {
+                try jw.objectField("thinking");
+                try jw.write(t);
+            }
+            if (self.signature) |s| {
+                try jw.objectField("signature");
+                try jw.write(s);
+            }
+        } else {
+            if (self.text) |t| {
+                try jw.objectField("text");
+                try jw.write(t);
+            }
+            if (self.id) |id| {
+                try jw.objectField("id");
+                try jw.write(id);
+            }
+            if (self.name) |n| {
+                try jw.objectField("name");
+                try jw.write(n);
+            }
+            if (self.input != .null) {
+                try jw.objectField("input");
+                try jw.write(self.input);
+            }
         }
         try jw.endObject();
     }

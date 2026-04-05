@@ -10,6 +10,7 @@ pub const Role = enum { user, assistant };
 pub const Message = struct {
     role: Role,
     content: []const u8,
+    thinking: ?[]const u8 = null,
     styled_lines: ?[]const agent.markdown.StyledLine = null,
     styled_content_len: usize = 0,
 };
@@ -54,6 +55,7 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
 pub fn deinit(self: *App) void {
     for (self.messages.items) |*msg| {
         self.alloc.free(msg.content);
+        if (msg.thinking) |t| self.alloc.free(t);
         if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
     }
     self.messages.deinit(self.alloc);
@@ -96,6 +98,28 @@ fn onChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
     const new_content = std.mem.concat(app.alloc, u8, &.{ last.content, chunk }) catch return;
     app.alloc.free(last.content);
     last.content = new_content;
+
+    app.needs_redraw = true;
+    wakeLoop(ctx.loop);
+}
+
+fn onThinkingChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
+    const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
+    const app = ctx.app;
+
+    app.mutex.lock();
+    defer app.mutex.unlock();
+
+    if (app.messages.items.len == 0) return;
+    const last = &app.messages.items[app.messages.items.len - 1];
+
+    if (last.thinking) |existing| {
+        const new_thinking = std.mem.concat(app.alloc, u8, &.{ existing, chunk }) catch return;
+        app.alloc.free(existing);
+        last.thinking = new_thinking;
+    } else {
+        last.thinking = app.alloc.dupe(u8, chunk) catch return;
+    }
 
     app.needs_redraw = true;
     wakeLoop(ctx.loop);
@@ -190,7 +214,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
         }
 
-        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk) catch |err| {
+        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk, onThinkingChunk) catch |err| {
             log.err("sendMessageStreaming failed: {}", .{err});
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -266,6 +290,8 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             content_blocks[i] = .{
                 .type = alloc.dupe(u8, block.type) catch "",
                 .text = if (block.text) |t| alloc.dupe(u8, t) catch null else null,
+                .thinking = if (block.thinking) |t| alloc.dupe(u8, t) catch null else null,
+                .signature = if (block.signature) |s| alloc.dupe(u8, s) catch null else null,
                 .id = if (block.id) |id| alloc.dupe(u8, id) catch null else null,
                 .name = if (block.name) |n| alloc.dupe(u8, n) catch null else null,
                 .input = input_copy,

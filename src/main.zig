@@ -131,6 +131,8 @@ pub fn main() !void {
             .key_press => |key| {
                 if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
                     running = false;
+                } else if (key.matches('t', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
+                    llm_client.config.effort = llm_client.config.effort.next();
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     if (at_picker.active) {
                         at_picker.reset(alloc);
@@ -516,6 +518,19 @@ pub fn main() !void {
                         col = result.col;
                     }
                 },
+                .thinking => |th| {
+                    if (th.is_header) {
+                        _ = chat_win.printSegment(.{
+                            .text = "Thinking:",
+                            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0x80, 0x30 } }, .italic = true, .bold = true },
+                        }, .{ .row_offset = row, .col_offset = 2 });
+                    } else if (th.text.len > 0) {
+                        _ = chat_win.printSegment(.{
+                            .text = th.text,
+                            .style = .{ .fg = .{ .rgb = .{ 0x77, 0x77, 0x77 } } },
+                        }, .{ .row_offset = row, .col_offset = 2 });
+                    }
+                },
             }
             row += 1;
         }
@@ -721,6 +736,17 @@ pub fn main() !void {
             .text = std.fmt.bufPrint(&status_buf, " {s} ", .{llm_client.config.model}) catch " ? ",
             .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = 0 });
+
+        // Effort badge — pinned to the right edge, only visible when thinking is on
+        if (llm_client.config.effort != .none) {
+            var effort_buf: [32]u8 = undefined;
+            const effort_text = std.fmt.bufPrint(&effort_buf, " thinking:{s} ", .{llm_client.config.effort.label()}) catch " thinking ";
+            const effort_col = vx.screen.width -| @as(u16, @intCast(effort_text.len)) -| 1;
+            _ = win.printSegment(.{
+                .text = effort_text,
+                .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            }, .{ .row_offset = status_row, .col_offset = effort_col });
+        }
 
         // State / tool info
         var info_buf: [128]u8 = undefined;
