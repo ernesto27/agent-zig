@@ -1,3 +1,14 @@
+const std = @import("std");
+const vaxis = @import("vaxis");
+const App = @import("App.zig");
+
+const Event = vaxis.Event;
+const EventLoop = vaxis.Loop(Event);
+
+pub const SpinnerState = struct {
+    generation: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+};
+
 /// Wrap text into at most `max_lines` lines of `width` columns.
 /// Handles embedded newlines: splits on '\n' first, then word-wraps each line.
 /// Returns a fixed array; unused slots are null.
@@ -46,7 +57,33 @@ pub fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_
     return lines;
 }
 
-const std = @import("std");
+pub fn loadingFrame() []const u8 {
+    const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };
+    const now_ms: u64 = @intCast(std.time.milliTimestamp());
+    return frames[(now_ms / 120) % frames.len];
+}
+
+pub fn wakeLoop(loop: *EventLoop) void {
+    loop.postEvent(.{ .winsize = .{
+        .rows = loop.vaxis.screen.height,
+        .cols = loop.vaxis.screen.width,
+        .x_pixel = 0,
+        .y_pixel = 0,
+    } });
+}
+
+pub fn spinnerThread(app: *App, loop: *EventLoop, spinner_state: *SpinnerState, generation: u64) void {
+    while (spinner_state.generation.load(.acquire) == generation) {
+        app.mutex.lock();
+        const still_loading = app.is_loading;
+        if (still_loading) app.needs_redraw = true;
+        app.mutex.unlock();
+
+        if (!still_loading) break;
+        wakeLoop(loop);
+        std.Thread.sleep(120 * std.time.ns_per_ms);
+    }
+}
 
 test "wrapText handles newlines" {
     const result = wrapText("hello\nworld", 80, 10);

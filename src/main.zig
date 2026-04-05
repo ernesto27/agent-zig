@@ -123,6 +123,7 @@ pub fn main() !void {
     defer draft.deinit(alloc);
     var selection: chat_selection.SelectionState = .{};
     var clipboard_status: ?[]const u8 = null;
+    var spinner_state = ui.SpinnerState{};
 
     while (running) {
         const event = loop.nextEvent();
@@ -334,6 +335,10 @@ pub fn main() !void {
                         input.clearRetainingCapacity();
                         auto_scroll = true;
                         cursor_pos = 0;
+
+                        const generation = spinner_state.generation.fetchAdd(1, .acq_rel) + 1;
+                        const spinner = try std.Thread.spawn(.{}, ui.spinnerThread, .{ &app, &loop, &spinner_state, generation });
+                        spinner.detach();
 
                         // Spawn background thread
                         const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ &app, &loop });
@@ -704,7 +709,7 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
             }, .{ .row_offset = 0, .col_offset = 1 });
         } else {
-            const prompt = if (app.is_loading) "... " else "> ";
+            const prompt = if (app.is_loading) ui.loadingFrame() else "> ";
             _ = input_win.printSegment(.{
                 .text = prompt,
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
