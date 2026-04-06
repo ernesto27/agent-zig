@@ -11,6 +11,8 @@ pub const Config = struct {
     effort: message.Effort = .none,
 };
 
+pub const CancelFn = *const fn (*anyopaque) bool;
+
 const anthropic_version = "2023-06-01";
 
 const StreamBlockType = enum {
@@ -188,6 +190,7 @@ pub const Client = struct {
         ctx: *anyopaque,
         on_chunk: *const fn (*anyopaque, []const u8) void,
         on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
+        should_cancel: CancelFn,
     ) !std.json.Parsed(message.MessagesResponse) {
         const model_info = providers.findModel(self.config.model);
         const req_body = message.MessagesRequest{
@@ -256,7 +259,7 @@ pub const Client = struct {
         var stream = StreamAccumulator.init(allocator);
         defer stream.deinit();
 
-        try parseSseStream(allocator, body_reader, &stream, ctx, on_chunk, on_thinking_chunk);
+        try parseSseStream(allocator, body_reader, &stream, ctx, on_chunk, on_thinking_chunk, should_cancel);
 
         const response_bytes = try buildStreamedResponseJson(allocator, &stream);
         defer allocator.free(response_bytes);
@@ -285,6 +288,7 @@ fn parseSseStream(
     ctx: *anyopaque,
     on_chunk: *const fn (*anyopaque, []const u8) void,
     on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
+    should_cancel: CancelFn,
 ) !void {
     // event_name is copied into this buffer so it survives the next reader call
     var event_name_buf: [64]u8 = undefined;
@@ -293,6 +297,8 @@ fn parseSseStream(
     defer data_buf.deinit(allocator);
 
     while (true) {
+        if (should_cancel(ctx)) return error.RequestCancelled;
+
         // takeDelimiter returns null at end-of-stream, slice otherwise
         const line = try reader.takeDelimiter('\n') orelse break;
         const trimmed = std.mem.trimRight(u8, line, "\r");

@@ -27,6 +27,11 @@ pub const ToolConfirmation = struct {
     cursor: u8 = 0, // 0 = Yes, 1 = No
 };
 
+pub const ConfirmationAction = enum {
+    approve,
+    deny,
+};
+
 tool_confirmation: ToolConfirmation = .{},
 preview_scroll: usize = 0,
 alloc: std.mem.Allocator,
@@ -38,6 +43,7 @@ mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
 tool_status: ?[]const u8 = null,
+cancel_requested: bool = false,
 
 const App = @This();
 const log = std.log.scoped(.app);
@@ -123,6 +129,59 @@ fn onThinkingChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
 
     app.needs_redraw = true;
     wakeLoop(ctx.loop);
+}
+
+pub fn shouldCancel(ctx_ptr: *anyopaque) bool {
+    const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
+    const app = ctx.app;
+
+    app.mutex.lock();
+    defer app.mutex.unlock();
+    return app.cancel_requested;
+}
+
+pub fn cancelActiveRequest(self: *App, loop: *EventLoop) bool {
+    self.mutex.lock();
+
+    if (!self.is_loading) {
+        self.mutex.unlock();
+        return false;
+    }
+
+    self.cancel_requested = true;
+    self.needs_redraw = true;
+    self.mutex.unlock();
+    wakeLoop(loop);
+    return true;
+}
+
+pub fn resolveToolConfirmation(self: *App, alloc: std.mem.Allocator, action: ConfirmationAction) !void {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
+    if (!self.tool_confirmation.pending) return;
+
+    if (action == .approve) {
+        self.tool_confirmation.approved = true;
+        self.tool_confirmation.pending = false;
+        self.tool_confirmation.cond.signal();
+        return;
+    }
+
+    var deny_buf: [256]u8 = undefined;
+    const deny_target = self.tool_confirmation.file_path;
+    const action_text = if (std.mem.eql(u8, self.tool_confirmation.tool_name, "write_file"))
+        "write"
+    else if (std.mem.eql(u8, self.tool_confirmation.tool_name, "bash"))
+        "run"
+    else
+        "edit";
+    const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{ action_text, deny_target }) catch "Permission denied";
+    try self.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
+    self.tool_confirmation.approved = false;
+    self.tool_confirmation.pending = false;
+    self.needs_redraw = true;
+    self.tool_confirmation.cond.signal();
 }
 
 fn wakeLoop(loop: *EventLoop) void {
@@ -214,10 +273,18 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
         }
 
-        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk, onThinkingChunk) catch |err| {
+        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
             log.err("sendMessageStreaming failed: {}", .{err});
             self.mutex.lock();
-            defer self.mutex.unlock();
+            if (err == error.RequestCancelled) {
+                self.is_loading = false;
+                self.tool_status = null;
+                self.cancel_requested = false;
+                self.needs_redraw = true;
+                self.mutex.unlock();
+                wakeLoop(loop);
+                return;
+            }
             if (self.messages.items.len > 0) {
                 const last = &self.messages.items[self.messages.items.len - 1];
                 alloc.free(last.content);
@@ -225,6 +292,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
                 const msg = std.fmt.bufPrint(&buf, "(error: {})", .{err}) catch "(error)";
                 last.content = alloc.dupe(u8, msg) catch "";
             }
+            self.mutex.unlock();
             break;
         };
         defer resp.deinit();
@@ -304,6 +372,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
 
         // Execute each tool
         const tool_results = alloc.alloc(agent.llm.message.ToolResultBlock, tool_uses.items.len) catch break;
+        var any_denied = false;
         for (tool_uses.items, 0..) |tool_use, i| {
             log.info("executing tool: {s}", .{tool_use.name});
             const needs_confirmation =
@@ -348,6 +417,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
                         .content = "User denied permission",
                         .is_error = true,
                     };
+                    any_denied = true;
                     continue;
                 }
             }
@@ -367,6 +437,8 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             .content = .{ .tool_result_blocks = tool_results },
         }) catch {};
 
+        if (any_denied) break;
+
         log.info("tool results appended, looping back", .{});
         self.mutex.lock();
         self.tool_status = null;
@@ -377,6 +449,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     self.mutex.lock();
     self.is_loading = false;
     self.tool_status = null;
+    self.cancel_requested = false;
     self.needs_redraw = true;
     self.mutex.unlock();
     wakeLoop(loop);

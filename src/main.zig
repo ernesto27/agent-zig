@@ -48,6 +48,30 @@ fn runSlashCommand(
     }
 }
 
+fn handleEscape(
+    alloc: std.mem.Allocator,
+    app: *App,
+    loop: *EventLoop,
+    at_picker: *at_picker_mod.AtPicker,
+    command_picker: *command_picker_mod.CommandPicker,
+    model_picker: *model_picker_mod.ModelPicker,
+    provider_picker: *provider_picker_mod.ProviderPicker,
+) !void {
+    if (app.tool_confirmation.pending) {
+        try app.resolveToolConfirmation(alloc, .deny);
+    } else if (app.cancelActiveRequest(loop)) {
+        return;
+    } else if (at_picker.active) {
+        at_picker.reset(alloc);
+    } else if (command_picker.active) {
+        command_picker.reset(alloc);
+    } else if (model_picker.active) {
+        model_picker.reset(alloc);
+    } else if (provider_picker.active) {
+        provider_picker.reset(alloc);
+    }
+}
+
 pub fn main() !void {
     log_file = try std.fs.cwd().createFile("agent.log", .{ .truncate = true });
     defer log_file.?.close();
@@ -138,15 +162,7 @@ pub fn main() !void {
                         llm_client.config.effort = llm_client.config.effort.next();
                     }
                 } else if (key.matches(vaxis.Key.escape, .{})) {
-                    if (at_picker.active) {
-                        at_picker.reset(alloc);
-                    } else if (command_picker.active) {
-                        command_picker.reset(alloc);
-                    } else if (model_picker.active) {
-                        model_picker.reset(alloc);
-                    } else if (provider_picker.active) {
-                        provider_picker.reset(alloc);
-                    }
+                    try handleEscape(alloc, &app, &loop, &at_picker, &command_picker, &model_picker, &provider_picker);
                 } else if (key.matches(vaxis.Key.up, .{})) {
                     if (at_picker.active) {
                         if (at_picker.selected > 0) at_picker.selected -= 1;
@@ -251,21 +267,9 @@ pub fn main() !void {
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (app.tool_confirmation.pending) {
                         if (app.tool_confirmation.cursor == 0) {
-                            app.mutex.lock();
-                            app.tool_confirmation.approved = true;
-                            app.tool_confirmation.pending = false;
-                            app.mutex.unlock();
-                            app.tool_confirmation.cond.signal();
+                            try app.resolveToolConfirmation(alloc, .approve);
                         } else {
-                            app.mutex.lock();
-                            var deny_buf: [256]u8 = undefined;
-                            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
-                            const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{ action, app.tool_confirmation.file_path }) catch "Permission denied";
-                            try app.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
-                            app.tool_confirmation.approved = false;
-                            app.tool_confirmation.pending = false;
-                            app.mutex.unlock();
-                            app.tool_confirmation.cond.signal();
+                            try app.resolveToolConfirmation(alloc, .deny);
                         }
                     } else if (command_picker.active) {
                         if (command_picker.selectedCommand()) |command| {
@@ -700,10 +704,10 @@ pub fn main() !void {
         if (app.tool_confirmation.pending) {
             var confirm_buf: [256]u8 = undefined;
             const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
-            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm", .{
+            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm   Esc cancel", .{
                 action,
                 app.tool_confirmation.file_path,
-            }) catch " ↑↓ select  Enter confirm";
+            }) catch " ↑↓ select  Enter confirm  Esc cancel";
             _ = input_win.printSegment(.{
                 .text = confirm_text,
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
