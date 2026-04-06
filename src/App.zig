@@ -19,18 +19,14 @@ pub const ToolConfirmation = struct {
     pending: bool = false,
     tool_name: []const u8 = "",
     file_path: []const u8 = "",
-    approved: bool = false,
     cond: std.Thread.Condition = .{},
     content: []const u8 = "",
     old_string: []const u8 = "",
     new_string: []const u8 = "",
-    cursor: u8 = 0, // 0 = Yes, 1 = No
+    cursor: ConfirmationAction = .approve,
 };
 
-pub const ConfirmationAction = enum {
-    approve,
-    deny,
-};
+pub const ConfirmationAction = enum { approve, deny, accept_all };
 
 tool_confirmation: ToolConfirmation = .{},
 preview_scroll: usize = 0,
@@ -161,26 +157,23 @@ pub fn resolveToolConfirmation(self: *App, alloc: std.mem.Allocator, action: Con
 
     if (!self.tool_confirmation.pending) return;
 
-    if (action == .approve) {
-        self.tool_confirmation.approved = true;
-        self.tool_confirmation.pending = false;
-        self.tool_confirmation.cond.signal();
-        return;
+    self.tool_confirmation.cursor = action;
+
+    if (action == .deny) {
+        var deny_buf: [256]u8 = undefined;
+        const deny_target = self.tool_confirmation.file_path;
+        const action_text = if (std.mem.eql(u8, self.tool_confirmation.tool_name, "write_file"))
+            "write"
+        else if (std.mem.eql(u8, self.tool_confirmation.tool_name, "bash"))
+            "run"
+        else
+            "edit";
+        const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{ action_text, deny_target }) catch "Permission denied";
+        try self.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
+        self.needs_redraw = true;
     }
 
-    var deny_buf: [256]u8 = undefined;
-    const deny_target = self.tool_confirmation.file_path;
-    const action_text = if (std.mem.eql(u8, self.tool_confirmation.tool_name, "write_file"))
-        "write"
-    else if (std.mem.eql(u8, self.tool_confirmation.tool_name, "bash"))
-        "run"
-    else
-        "edit";
-    const deny_text = std.fmt.bufPrint(&deny_buf, "Permission denied: agent cannot {s} '{s}'", .{ action_text, deny_target }) catch "Permission denied";
-    try self.messages.append(alloc, .{ .role = .user, .content = try alloc.dupe(u8, deny_text) });
-    self.tool_confirmation.approved = false;
     self.tool_confirmation.pending = false;
-    self.needs_redraw = true;
     self.tool_confirmation.cond.signal();
 }
 
@@ -375,50 +368,52 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         var any_denied = false;
         for (tool_uses.items, 0..) |tool_use, i| {
             log.info("executing tool: {s}", .{tool_use.name});
-            const needs_confirmation =
-                std.mem.eql(u8, tool_use.name, "write_file") or
-                std.mem.eql(u8, tool_use.name, "edit_file") or
-                std.mem.eql(u8, tool_use.name, "bash");
 
-            if (needs_confirmation) {
-                const is_bash = std.mem.eql(u8, tool_use.name, "bash");
-                const fp = if (is_bash)
-                    agent.tools.getStringField(tool_use.input, "command") orelse ""
-                else
-                    agent.tools.getStringField(tool_use.input, "file_path") orelse "";
-                const cnt = agent.tools.getStringField(tool_use.input, "content") orelse "";
-                const old_s = agent.tools.getStringField(tool_use.input, "old_string") orelse "";
-                const new_s = agent.tools.getStringField(tool_use.input, "new_string") orelse "";
+            if (self.tool_confirmation.cursor != .accept_all) {
+                const needs_confirmation =
+                    std.mem.eql(u8, tool_use.name, "write_file") or
+                    std.mem.eql(u8, tool_use.name, "edit_file") or
+                    std.mem.eql(u8, tool_use.name, "bash");
 
-                self.mutex.lock();
-                self.tool_confirmation.pending = true;
-                self.tool_confirmation.tool_name = tool_use.name;
-                self.tool_confirmation.file_path = fp;
-                self.tool_confirmation.content = cnt;
-                self.tool_confirmation.old_string = old_s;
-                self.tool_confirmation.new_string = new_s;
-                self.tool_confirmation.approved = false;
-                self.tool_confirmation.cursor = 0;
-                self.tool_status = tool_use.name;
-                self.needs_redraw = true;
-                self.mutex.unlock();
-                wakeLoop(loop);
+                if (needs_confirmation) {
+                    const is_bash = std.mem.eql(u8, tool_use.name, "bash");
+                    const fp = if (is_bash)
+                        agent.tools.getStringField(tool_use.input, "command") orelse ""
+                    else
+                        agent.tools.getStringField(tool_use.input, "file_path") orelse "";
+                    const cnt = agent.tools.getStringField(tool_use.input, "content") orelse "";
+                    const old_s = agent.tools.getStringField(tool_use.input, "old_string") orelse "";
+                    const new_s = agent.tools.getStringField(tool_use.input, "new_string") orelse "";
 
-                self.mutex.lock();
-                while (self.tool_confirmation.pending) {
-                    self.tool_confirmation.cond.wait(&self.mutex);
-                }
-                const approved = self.tool_confirmation.approved;
-                self.mutex.unlock();
+                    self.mutex.lock();
+                    self.tool_confirmation.pending = true;
+                    self.tool_confirmation.tool_name = tool_use.name;
+                    self.tool_confirmation.file_path = fp;
+                    self.tool_confirmation.content = cnt;
+                    self.tool_confirmation.old_string = old_s;
+                    self.tool_confirmation.new_string = new_s;
+                    self.tool_confirmation.cursor = .approve;
+                    self.tool_status = tool_use.name;
+                    self.needs_redraw = true;
+                    self.mutex.unlock();
+                    wakeLoop(loop);
 
-                if (!approved) {
-                    tool_results[i] = .{
-                        .tool_use_id = tool_use.id,
-                        .content = "User denied permission",
-                        .is_error = true,
-                    };
-                    any_denied = true;
-                    continue;
+                    self.mutex.lock();
+                    while (self.tool_confirmation.pending) {
+                        self.tool_confirmation.cond.wait(&self.mutex);
+                    }
+                    const approved = self.tool_confirmation.cursor != .deny;
+                    self.mutex.unlock();
+
+                    if (!approved) {
+                        tool_results[i] = .{
+                            .tool_use_id = tool_use.id,
+                            .content = "User denied permission",
+                            .is_error = true,
+                        };
+                        any_denied = true;
+                        continue;
+                    }
                 }
             }
 

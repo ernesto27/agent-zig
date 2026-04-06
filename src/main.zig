@@ -161,6 +161,8 @@ pub fn main() !void {
                     if (model != null and model.?.supports_thinking) {
                         llm_client.config.effort = llm_client.config.effort.next();
                     }
+                } else if (key.matches('a', .{ .ctrl = true })) {
+                    app.tool_confirmation.cursor = .approve;
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     try handleEscape(alloc, &app, &loop, &at_picker, &command_picker, &model_picker, &provider_picker);
                 } else if (key.matches(vaxis.Key.up, .{})) {
@@ -173,7 +175,11 @@ pub fn main() !void {
                     } else if (provider_picker.active and provider_picker.phase == .list) {
                         if (provider_picker.selected > 0) provider_picker.selected -= 1;
                     } else if (app.tool_confirmation.pending) {
-                        app.tool_confirmation.cursor = 0;
+                        app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
+                            .approve => .accept_all,
+                            .deny => .approve,
+                            .accept_all => .deny,
+                        };
                     } else if (!app.tool_confirmation.pending and history.items.len > 0) {
                         if (history_idx == null) {
                             draft.clearRetainingCapacity();
@@ -201,7 +207,11 @@ pub fn main() !void {
                         if (provider_picker.selected + 1 < model_picker_mod.providers.len)
                             provider_picker.selected += 1;
                     } else if (app.tool_confirmation.pending) {
-                        app.tool_confirmation.cursor = 1;
+                        app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
+                            .approve => .deny,
+                            .deny => .accept_all,
+                            .accept_all => .approve,
+                        };
                     } else if (!app.tool_confirmation.pending and history_idx != null) {
                         if (history_idx.? + 1 < history.items.len) {
                             history_idx = history_idx.? + 1;
@@ -266,11 +276,7 @@ pub fn main() !void {
                     }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (app.tool_confirmation.pending) {
-                        if (app.tool_confirmation.cursor == 0) {
-                            try app.resolveToolConfirmation(alloc, .approve);
-                        } else {
-                            try app.resolveToolConfirmation(alloc, .deny);
-                        }
+                        try app.resolveToolConfirmation(alloc, app.tool_confirmation.cursor);
                     } else if (command_picker.active) {
                         if (command_picker.selectedCommand()) |command| {
                             try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker);
@@ -638,18 +644,21 @@ pub fn main() !void {
                 }
             }
 
-            // Shared Yes/No selector at the bottom of the preview panel
-            const yes_selected = app.tool_confirmation.cursor == 0;
-            _ = preview_win.printSegment(.{
-                .text = if (yes_selected) " ❯ 1. Yes" else "   1. Yes",
-                .style = .{ .fg = if (yes_selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = yes_selected },
-            }, .{ .row_offset = sel_row, .col_offset = 1 });
-
-            const no_selected = app.tool_confirmation.cursor == 1;
-            _ = preview_win.printSegment(.{
-                .text = if (no_selected) " ❯ 2. No" else "   2. No",
-                .style = .{ .fg = if (no_selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = no_selected },
-            }, .{ .row_offset = sel_row + 1, .col_offset = 1 });
+            // Shared selector at the bottom of the preview panel
+            const confirm_options = [_]struct { label: []const u8, action: App.ConfirmationAction }{
+                .{ .label = "1. Yes", .action = .approve },
+                .{ .label = "2. No", .action = .deny },
+                .{ .label = "3. Accept all", .action = .accept_all },
+            };
+            var opt_bufs: [3][32]u8 = undefined;
+            for (confirm_options, 0..) |opt, idx| {
+                const selected = app.tool_confirmation.cursor == opt.action;
+                const text = std.fmt.bufPrint(&opt_bufs[idx], "{s}{s}", .{ if (selected) " ❯ " else "   ", opt.label }) catch opt.label;
+                _ = preview_win.printSegment(.{
+                    .text = text,
+                    .style = .{ .fg = if (selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = selected },
+                }, .{ .row_offset = sel_row + @as(u16, @intCast(idx)), .col_offset = 1 });
+            }
         }
 
         // @picker overlay — rendered above the input box
@@ -748,6 +757,16 @@ pub fn main() !void {
             .text = std.fmt.bufPrint(&status_buf, " {s} ", .{llm_client.config.model}) catch " ? ",
             .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = 0 });
+
+        // Accept-all badge — pinned to the right edge, visible when accept_all is active
+        if (app.tool_confirmation.cursor == .accept_all) {
+            const badge = " accept-all  ctrl+a to reset ";
+            const badge_col = vx.screen.width -| @as(u16, @intCast(badge.len)) -| 1;
+            _ = win.printSegment(.{
+                .text = badge,
+                .style = .{ .bg = .{ .rgb = .{ 0x20, 0x80, 0x40 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            }, .{ .row_offset = status_row, .col_offset = badge_col });
+        }
 
         // Effort badge — pinned to the right edge, only visible when thinking is on
         if (llm_client.config.effort != .none) {
