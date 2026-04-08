@@ -1,10 +1,22 @@
 const std = @import("std");
 const log = std.log.scoped(.config);
 
-pub const Config = struct {
+pub const ProviderConfig = struct {
     apiKey: []const u8,
     baseUrl: []const u8,
     model: []const u8,
+};
+
+pub const Config = struct {
+    selected: []const u8,
+    anthropic: ProviderConfig,
+    openai: ProviderConfig,
+
+    pub fn forProvider(self: *Config, name: []const u8) ?*ProviderConfig {
+        if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;
+        if (std.mem.eql(u8, name, "OpenAI")) return &self.openai;
+        return null;
+    }
 };
 
 fn configDir(allocator: std.mem.Allocator) ![]const u8 {
@@ -30,7 +42,11 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
     defer allocator.free(path);
 
     std.fs.accessAbsolute(path, .{}) catch {
-        const empty = Config{ .apiKey = "", .baseUrl = "", .model = "" };
+        const empty = Config{
+            .selected = "",
+            .anthropic = .{ .apiKey = "", .baseUrl = "", .model = "" },
+            .openai = .{ .apiKey = "", .baseUrl = "", .model = "" },
+        };
         const json = try std.json.Stringify.valueAlloc(allocator, empty, .{ .whitespace = .indent_4 });
         defer allocator.free(json);
 

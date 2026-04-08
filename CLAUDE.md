@@ -2,9 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow
+
+Always ask for approval before applying code changes in real-time, unless explicitly told otherwise.
+
 ## Project Overview
 
-Zigent is a terminal-based AI coding agent (inspired by [OpenCode](https://github.com/sst/opencode)) written in Zig. It aims to provide a TUI chat interface that talks to LLMs and can execute coding tools (file read/write, shell commands, etc.). The project is in early Phase 1 — basic TUI layout exists but no LLM connectivity yet.
+Zigent is a terminal-based AI coding agent (inspired by [OpenCode](https://github.com/sst/opencode)) written in Zig. It provides a TUI chat interface that talks to LLMs and can execute coding tools (file read/write, shell commands, etc.).
 
 ## Build & Run
 
@@ -30,23 +34,62 @@ Endpoints: `POST /v1/messages` (streaming + non-streaming), `GET /health`.
 
 The project has two Zig modules defined in `build.zig`:
 
-- **`agent` module** (`src/root.zig`) — Library module intended for reusable business logic. Currently minimal (placeholder `add` function and `bufferedPrint`). This is what gets exposed to consumers via `@import("agent")`.
-- **Executable root** (`src/main.zig`) — The TUI application. Imports both the `agent` module and `vaxis`. Contains the event loop, chat rendering, input handling, and scrollable message display.
+- **`agent` module** (`src/root.zig`) — Library module for reusable business logic. Exposes `llm`, `markdown`, and utility helpers via `@import("agent")`.
+- **Executable root** (`src/main.zig`) — The TUI application. Imports `agent`, `vaxis`, and all UI modules. Contains the event loop, input handling, and slash command dispatch.
 
-The TUI uses [libvaxis](https://github.com/rockorager/libvaxis) 0.5.1 for terminal rendering and event handling. The main loop follows a vaxis pattern: `EventLoop` dispatches events (key presses, window resizes), and the app redraws on each event using vaxis window/child primitives.
+The TUI uses [libvaxis](https://github.com/rockorager/libvaxis) 0.5.1 for terminal rendering and event handling.
 
-### Current State
+## Source Files
 
-- TUI layout works: header bar, scrollable chat area with border, text input field, status bar, scrollbar
-- Messages are hardcoded test data with a placeholder AI response on Enter
-- No HTTP client, no LLM API calls, no tool system yet
+```
+src/
+├── main.zig              # Entry point, event loop, keybindings
+├── App.zig               # App state: messages, LLM client, tool confirmation, spinner
+├── root.zig              # agent module root (re-exports llm, markdown, etc.)
+├── config.zig            # Config: reads ~/.config/agent-zig/config.json (apiKey, baseUrl, model)
+├── layout.zig            # TUI layout helpers
+├── ui.zig                # Chat rendering, message display
+├── markdown.zig          # Markdown → styled terminal lines renderer
+├── tools.zig             # Tool registry and executor (read_file, write_file, edit_file, bash)
+├── at_picker.zig         # @ file picker widget
+├── command_picker.zig    # / slash command picker widget (/provider, /model)
+├── model_picker.zig      # Model picker widget
+├── provider_picker.zig   # Provider picker widget
+├── chat_selection.zig    # Chat history selection
+└── llm/
+    ├── client.zig        # HTTP LLM client (streaming SSE, tool calls, thinking, cancellation)
+    ├── message.zig       # Message types: role, content blocks, tool definitions, effort
+    └── providers.zig     # Provider/model registry (Anthropic, OpenAI)
+```
 
-### Planned Architecture (from TODO.md)
+## Current Features
 
-The intended module structure separates concerns into `tui/`, `llm/`, `tools/`, `agent/`, and `util/` subdirectories under `src/`. See `TODO.md` for the full 7-phase roadmap.
+- **LLM connectivity**: Streaming responses via SSE from Anthropic and OpenAI APIs
+- **Multi-provider support**: Anthropic (Claude Opus/Sonnet/Haiku) and OpenAI (GPT-4o, o3, o4-mini)
+- **Thinking support**: Extended thinking display for supported models
+- **Tool system**: `read_file`, `write_file`, `edit_file`, `bash` — with approve/deny/accept_all confirmation UI
+- **Markdown rendering**: Styled output in the chat area
+- **Spinner**: Loading indicator during LLM generation
+- **Cancellation**: Esc cancels in-flight LLM requests
+- **Slash commands**: `/provider`, `/model` to switch providers and models at runtime
+- **@ file picker**: Attach files to messages
+- **Logging**: File-based logger (written to disk, not terminal)
+
+## Configuration
+
+Config is read from `~/.config/agent-zig/config.json`:
+
+```json
+{
+  "apiKey": "sk-...",
+  "baseUrl": "https://api.anthropic.com",
+  "model": "claude-sonnet-4-6"
+}
+```
 
 ## Key Conventions
 
 - **Allocator**: Uses `GeneralPurposeAllocator` at the top level. All heap-allocating functions receive an allocator parameter (standard Zig pattern).
-- **ArrayList pattern**: Uses `std.ArrayList(T){}` with explicit allocator passed to each method call (not stored in the struct), perVaxis conventions.
+- **ArrayList pattern**: Uses `std.ArrayList(T){}` with explicit allocator passed to each method call (not stored in the struct), per Vaxis conventions.
 - **Target**: Single static binary with zero runtime dependencies.
+- **Logging**: Use `std.log.scoped(.scope_name)` — logs go to a file, not stderr, to avoid polluting the TUI.

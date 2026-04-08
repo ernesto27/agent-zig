@@ -85,7 +85,7 @@ pub fn main() !void {
         return;
     };
     defer parsed_config.deinit();
-    const config = parsed_config.value;
+    var config = parsed_config.value;
 
     var model_picker = model_picker_mod.ModelPicker.init();
     defer model_picker.deinit(alloc);
@@ -99,11 +99,18 @@ pub fn main() !void {
     var at_picker = at_picker_mod.AtPicker.init();
     defer at_picker.deinit(alloc);
 
-    var llm_client = agent.llm.Client.init(alloc, .{
-        .base_url = config.baseUrl,
-        .api_key = config.apiKey,
-        .model = config.model,
-    });
+    var llm_client_cfg = agent.llm.Config{
+        .base_url = "",
+        .api_key = "",
+        .model = config.selected,
+    };
+    if (agent.llm.providers.findModel(config.selected)) |found| {
+        if (config.forProvider(found.provider.name)) |pc| {
+            llm_client_cfg.base_url = pc.baseUrl;
+            llm_client_cfg.api_key = pc.apiKey;
+        }
+    }
+    var llm_client = agent.llm.Client.init(alloc, llm_client_cfg);
     defer llm_client.deinit();
 
     var app = App.init(alloc, &llm_client);
@@ -158,7 +165,7 @@ pub fn main() !void {
                     running = false;
                 } else if (key.matches('t', .{ .ctrl = true })) {
                     const model = model_picker_mod.findModel(llm_client.config.model);
-                    if (model != null and model.?.supports_thinking) {
+                    if (model != null and model.?.model.supports_thinking) {
                         llm_client.config.effort = llm_client.config.effort.next();
                     }
                 } else if (key.matches('a', .{ .ctrl = true })) {
@@ -307,11 +314,15 @@ pub fn main() !void {
                     } else if (model_picker.active and model_picker.results.items.len > 0) {
                         const selected = model_picker.results.items[model_picker.selected];
                         app.llm_client.config.model = selected.id;
-                        agent.config.save(alloc, .{
-                            .apiKey = config.apiKey,
-                            .baseUrl = config.baseUrl,
-                            .model = selected.id,
-                        }) catch {};
+                        config.selected = selected.id;
+                        if (agent.llm.providers.findModel(selected.id)) |found| {
+                            if (config.forProvider(found.provider.name)) |pc| {
+                                app.llm_client.config.base_url = pc.baseUrl;
+                                app.llm_client.config.api_key = pc.apiKey;
+                                pc.model = selected.id;
+                            }
+                        }
+                        agent.config.save(alloc, config) catch {};
                         model_picker.reset(alloc);
                     } else if (provider_picker.active and provider_picker.phase == .list) {
                         provider_picker.phase = .key_input;
@@ -319,11 +330,10 @@ pub fn main() !void {
                         if (provider_picker.key_input.items.len > 0) {
                             const new_key = provider_picker.key_input.items;
                             app.llm_client.config.api_key = new_key;
-                            agent.config.save(alloc, .{
-                                .apiKey = new_key,
-                                .baseUrl = config.baseUrl,
-                                .model = config.model,
-                            }) catch {};
+                            if (config.forProvider(provider_picker.selectedProvider().name)) |pc| {
+                                pc.apiKey = new_key;
+                            }
+                            agent.config.save(alloc, config) catch {};
                         }
                         provider_picker.reset(alloc);
                     } else if (input.items.len > 0 and !app.is_loading) {

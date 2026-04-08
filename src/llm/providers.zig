@@ -7,6 +7,11 @@ pub const Model = struct {
     supports_thinking: bool = false,
 };
 
+pub const FindResult = struct {
+    provider: *const Provider,
+    model: *const Model,
+};
+
 pub const Provider = struct {
     name: []const u8,
     models: []const Model,
@@ -24,18 +29,20 @@ pub const providers = [_]Provider{
     .{
         .name = "OpenAI",
         .models = &[_]Model{
-            .{ .id = "gpt-4o", .display = "GPT-4o" },
-            .{ .id = "gpt-4o-mini", .display = "GPT-4o Mini" },
-            .{ .id = "o3", .display = "o3" },
-            .{ .id = "o4-mini", .display = "o4 Mini" },
+            .{ .id = "gpt-5.4", .display = "GPT-5.4" },
+            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro" },
+            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini" },
+            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano" },
+            .{ .id = "gpt-5", .display = "GPT-5" },
+            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini" },
         },
     },
 };
 
-pub fn findModel(id: []const u8) ?*const Model {
+pub fn findModel(id: []const u8) ?FindResult {
     for (&providers) |*p| {
         for (p.models) |*m| {
-            if (std.mem.eql(u8, m.id, id)) return m;
+            if (std.mem.eql(u8, m.id, id)) return .{ .provider = p, .model = m };
         }
     }
     return null;

@@ -131,7 +131,7 @@ pub const Client = struct {
             .messages = messages,
             .tools = tools,
             .effort = self.config.effort,
-            .supports_thinking = model_info != null and model_info.?.supports_thinking,
+            .supports_thinking = model_info != null and model_info.?.model.supports_thinking,
         };
 
         const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
@@ -199,7 +199,7 @@ pub const Client = struct {
             .stream = true,
             .tools = tools,
             .effort = self.config.effort,
-            .supports_thinking = model_info != null and model_info.?.supports_thinking,
+            .supports_thinking = model_info != null and model_info.?.model.supports_thinking,
         };
         const body = try std.json.Stringify.valueAlloc(allocator, req_body, .{});
         defer allocator.free(body);

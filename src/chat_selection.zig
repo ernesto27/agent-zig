@@ -18,13 +18,19 @@ pub const ThinkingLine = struct {
     is_header: bool,
 };
 
+pub const StyledRenderedLine = struct {
+    spans: []const agent.markdown.StyledSpan,
+    indent: u16,
+    block_bg: ?vaxis.Cell.Color,
+};
+
 pub const RenderedLine = struct {
     text: []const u8,
     display_cols: usize,
     start_col: u16 = 1,
     entry: union(enum) {
         plain: PlainRenderedLine,
-        styled: agent.markdown.StyledLine,
+        styled: StyledRenderedLine,
         thinking: ThinkingLine,
     },
 };
@@ -141,13 +147,17 @@ pub fn buildRenderedLines(
             }
 
             const styled = app.getStyledLines(msg) catch &.{};
+            const styled_wrap_w: usize = @max(1, @as(usize, chat_width) -| 2);
             for (styled) |sline| {
-                const rendered = try buildStyledLineText(allocator, sline);
-                try lines.append(allocator, .{
-                    .text = rendered,
-                    .display_cols = displayWidth(rendered, width_method),
-                    .entry = .{ .styled = sline },
-                });
+                const wrapped_lines = try wrapStyledLine(allocator, sline, styled_wrap_w, width_method);
+                for (wrapped_lines) |wrapped_line| {
+                    const rendered = try buildWrappedStyledLineText(allocator, wrapped_line);
+                    try lines.append(allocator, .{
+                        .text = rendered,
+                        .display_cols = displayWidth(rendered, width_method),
+                        .entry = .{ .styled = wrapped_line },
+                    });
+                }
             }
         } else {
             const prefix = "You: ";
@@ -200,6 +210,174 @@ fn buildStyledLineText(allocator: Allocator, line: agent.markdown.StyledLine) ![
     }
 
     return rendered;
+}
+
+fn buildWrappedStyledLineText(allocator: Allocator, line: StyledRenderedLine) ![]const u8 {
+    var total_len: usize = line.indent;
+    for (line.spans) |span| total_len += span.text.len;
+
+    const rendered = try allocator.alloc(u8, total_len);
+    @memset(rendered[0..line.indent], ' ');
+
+    var offset: usize = line.indent;
+    for (line.spans) |span| {
+        @memcpy(rendered[offset .. offset + span.text.len], span.text);
+        offset += span.text.len;
+    }
+
+    return rendered;
+}
+
+const StyledPiece = struct {
+    text: []const u8,
+    style: vaxis.Cell.Style,
+    width: usize,
+    is_space: bool,
+};
+
+fn wrapStyledLine(
+    allocator: Allocator,
+    line: agent.markdown.StyledLine,
+    width: usize,
+    width_method: WidthMethod,
+) ![]const StyledRenderedLine {
+    if (line.spans.len == 0) {
+        const empty = try allocator.alloc(StyledRenderedLine, 1);
+        empty[0] = .{
+            .spans = try allocator.alloc(agent.markdown.StyledSpan, 0),
+            .indent = line.indent,
+            .block_bg = line.block_bg,
+        };
+        return empty;
+    }
+
+    var pieces = std.ArrayList(StyledPiece){};
+    defer pieces.deinit(allocator);
+    try collectStyledPieces(allocator, line.spans, width_method, &pieces);
+
+    if (pieces.items.len == 0) {
+        const empty = try allocator.alloc(StyledRenderedLine, 1);
+        empty[0] = .{
+            .spans = try allocator.alloc(agent.markdown.StyledSpan, 0),
+            .indent = line.indent,
+            .block_bg = line.block_bg,
+        };
+        return empty;
+    }
+
+    var wrapped = std.ArrayList(StyledRenderedLine){};
+    defer wrapped.deinit(allocator);
+
+    const available_width = @max(1, width -| line.indent);
+    const prefer_word_breaks = line.block_bg == null;
+
+    var line_start: usize = 0;
+    var idx: usize = 0;
+    while (idx < pieces.items.len) {
+        var current_width: usize = 0;
+        var last_space: ?usize = null;
+
+        while (idx < pieces.items.len) : (idx += 1) {
+            const piece = pieces.items[idx];
+            const next_width = current_width + piece.width;
+            if (current_width > 0 and next_width > available_width) break;
+            current_width = next_width;
+            if (prefer_word_breaks and piece.is_space) last_space = idx;
+        }
+
+        var line_end = idx;
+        if (idx < pieces.items.len) {
+            if (prefer_word_breaks) {
+                if (last_space) |space_idx| {
+                    if (space_idx > line_start) {
+                        line_end = space_idx;
+                        idx = space_idx + 1;
+                        while (idx < pieces.items.len and pieces.items[idx].is_space) : (idx += 1) {}
+                    }
+                }
+            }
+
+            if (line_end == line_start) {
+                line_end = @min(line_start + 1, pieces.items.len);
+                idx = line_end;
+            }
+        }
+
+        try wrapped.append(allocator, try makeWrappedStyledLine(allocator, line, pieces.items[line_start..line_end]));
+        line_start = idx;
+        while (line_start < pieces.items.len and pieces.items[line_start].is_space) : (line_start += 1) {}
+        idx = line_start;
+    }
+
+    return wrapped.toOwnedSlice(allocator);
+}
+
+fn collectStyledPieces(
+    allocator: Allocator,
+    spans: []const agent.markdown.StyledSpan,
+    width_method: WidthMethod,
+    pieces: *std.ArrayList(StyledPiece),
+) !void {
+    for (spans) |span| {
+        var iter = vaxis.unicode.graphemeIterator(span.text);
+        while (iter.next()) |grapheme| {
+            const bytes = grapheme.bytes(span.text);
+            try pieces.append(allocator, .{
+                .text = bytes,
+                .style = span.style,
+                .width = @max(1, vaxis.gwidth.gwidth(bytes, width_method)),
+                .is_space = std.mem.eql(u8, bytes, " "),
+            });
+        }
+    }
+}
+
+fn makeWrappedStyledLine(
+    allocator: Allocator,
+    original: agent.markdown.StyledLine,
+    pieces: []const StyledPiece,
+) !StyledRenderedLine {
+    var spans = std.ArrayList(agent.markdown.StyledSpan){};
+    defer spans.deinit(allocator);
+
+    var current_style: ?vaxis.Cell.Style = null;
+    var current_bytes = std.ArrayList(u8){};
+    defer current_bytes.deinit(allocator);
+
+    for (pieces) |piece| {
+        if (current_style) |style| {
+            if (!stylesEqual(style, piece.style)) {
+                try spans.append(allocator, .{
+                    .text = try current_bytes.toOwnedSlice(allocator),
+                    .style = style,
+                });
+                current_bytes = std.ArrayList(u8){};
+            }
+        }
+
+        if (current_style == null or !stylesEqual(current_style.?, piece.style)) {
+            current_style = piece.style;
+        }
+
+        try current_bytes.appendSlice(allocator, piece.text);
+    }
+
+    if (current_style) |style| {
+        try spans.append(allocator, .{
+            .text = try current_bytes.toOwnedSlice(allocator),
+            .style = style,
+        });
+    }
+
+    return .{
+        .spans = try spans.toOwnedSlice(allocator),
+        .indent = original.indent,
+        .block_bg = original.block_bg,
+    };
+}
+
+fn stylesEqual(a: vaxis.Cell.Style, b: vaxis.Cell.Style) bool {
+    return std.meta.eql(a, b);
 }
 
 fn displayWidth(text: []const u8, width_method: WidthMethod) usize {
@@ -315,4 +493,55 @@ pub fn selectedText(
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+test "wrapStyledLine wraps long assistant paragraph" {
+    const allocator = std.testing.allocator;
+    const width_method = std.enums.values(WidthMethod)[0];
+
+    const spans = try allocator.alloc(agent.markdown.StyledSpan, 1);
+    defer allocator.free(spans[0].text);
+    defer allocator.free(spans);
+    spans[0] = .{ .text = try allocator.dupe(u8, "hello world from zig"), .style = .{} };
+
+    const wrapped = try wrapStyledLine(allocator, .{ .spans = spans, .indent = 0, .block_bg = null }, 8, width_method);
+    defer {
+        for (wrapped) |line| {
+            for (line.spans) |span| allocator.free(span.text);
+            allocator.free(line.spans);
+        }
+        allocator.free(wrapped);
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), wrapped.len);
+    try std.testing.expectEqualStrings("hello", wrapped[0].spans[0].text);
+    try std.testing.expectEqualStrings("world", wrapped[1].spans[0].text);
+    try std.testing.expectEqualStrings("from zig", wrapped[2].spans[0].text);
+}
+
+test "wrapStyledLine preserves indent and styles" {
+    const allocator = std.testing.allocator;
+    const width_method = std.enums.values(WidthMethod)[0];
+
+    const spans = try allocator.alloc(agent.markdown.StyledSpan, 2);
+    defer {
+        allocator.free(spans[0].text);
+        allocator.free(spans[1].text);
+        allocator.free(spans);
+    }
+    spans[0] = .{ .text = try allocator.dupe(u8, "bold text"), .style = .{ .bold = true } };
+    spans[1] = .{ .text = try allocator.dupe(u8, " tail"), .style = .{} };
+
+    const wrapped = try wrapStyledLine(allocator, .{ .spans = spans, .indent = 2, .block_bg = null }, 8, width_method);
+    defer {
+        for (wrapped) |line| {
+            for (line.spans) |span| allocator.free(span.text);
+            allocator.free(line.spans);
+        }
+        allocator.free(wrapped);
+    }
+
+    try std.testing.expect(wrapped.len >= 2);
+    try std.testing.expectEqual(@as(u16, 2), wrapped[0].indent);
+    try std.testing.expect(wrapped[0].spans[0].style.bold);
 }
