@@ -44,8 +44,8 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
     std.fs.accessAbsolute(path, .{}) catch {
         const empty = Config{
             .selected = "",
-            .anthropic = .{ .apiKey = "", .baseUrl = "", .model = "" },
-            .openai = .{ .apiKey = "", .baseUrl = "", .model = "" },
+            .anthropic = .{ .apiKey = "", .baseUrl = "https://api.anthropic.com", .model = "" },
+            .openai = .{ .apiKey = "", .baseUrl = "https://api.openai.com", .model = "" },
         };
         const json = try std.json.Stringify.valueAlloc(allocator, empty, .{ .whitespace = .indent_4 });
         defer allocator.free(json);

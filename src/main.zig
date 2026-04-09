@@ -103,8 +103,10 @@ pub fn main() !void {
         .base_url = "",
         .api_key = "",
         .model = config.selected,
+        .provider_name = "",
     };
     if (agent.llm.providers.findModel(config.selected)) |found| {
+        llm_client_cfg.provider_name = found.provider.name;
         if (config.forProvider(found.provider.name)) |pc| {
             llm_client_cfg.base_url = pc.baseUrl;
             llm_client_cfg.api_key = pc.apiKey;
@@ -329,8 +331,10 @@ pub fn main() !void {
                     } else if (provider_picker.active and provider_picker.phase == .key_input) {
                         if (provider_picker.key_input.items.len > 0) {
                             const new_key = provider_picker.key_input.items;
+                            const provider_name = provider_picker.selectedProvider().name;
                             app.llm_client.config.api_key = new_key;
-                            if (config.forProvider(provider_picker.selectedProvider().name)) |pc| {
+                            app.llm_client.config.provider_name = provider_name;
+                            if (config.forProvider(provider_name)) |pc| {
                                 pc.apiKey = new_key;
                             }
                             agent.config.save(alloc, config) catch {};

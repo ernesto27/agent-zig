@@ -29,12 +29,12 @@ pub const providers = [_]Provider{
     .{
         .name = "OpenAI",
         .models = &[_]Model{
-            .{ .id = "gpt-5.4", .display = "GPT-5.4" },
-            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro" },
-            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini" },
-            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano" },
-            .{ .id = "gpt-5", .display = "GPT-5" },
-            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini" },
+            .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true },
+            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true },
+            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true },
+            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano", .supports_thinking = true },
+            .{ .id = "gpt-5", .display = "GPT-5", .supports_thinking = true },
+            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true },
         },
     },
 };
