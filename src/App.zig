@@ -54,12 +54,28 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
     };
 }
 
-pub fn deinit(self: *App) void {
+fn freeMessages(self: *App) void {
     for (self.messages.items) |*msg| {
         self.alloc.free(msg.content);
         if (msg.thinking) |t| self.alloc.free(t);
         if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
     }
+    for (self.llm_history.items) |msg| {
+        switch (msg.content) {
+            .text => |t| self.alloc.free(t),
+            else => {},
+        }
+    }
+}
+
+pub fn clearHistory(self: *App) void {
+    self.freeMessages();
+    self.messages.clearRetainingCapacity();
+    self.llm_history.clearRetainingCapacity();
+}
+
+pub fn deinit(self: *App) void {
+    self.freeMessages();
     self.messages.deinit(self.alloc);
     self.llm_history.deinit(self.alloc);
     self.clearPendingAttachments();

@@ -3,10 +3,7 @@ const vaxis = @import("vaxis");
 
 pub const MAX_RESULTS = 10;
 
-pub const CommandAction = enum {
-    provider,
-    model,
-};
+pub const CommandAction = enum { provider, model, clear };
 
 pub const Command = struct {
     name: []const u8,
@@ -17,6 +14,7 @@ pub const Command = struct {
 pub const commands = [_]Command{
     .{ .name = "provider", .description = "Set provider API key", .action = .provider },
     .{ .name = "model", .description = "Choose active model", .action = .model },
+    .{ .name = "clear", .description = "Clear conversation", .action = .clear },
 };
 
 pub const CommandPicker = struct {

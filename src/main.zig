@@ -38,6 +38,7 @@ fn runSlashCommand(
     cursor_pos: *usize,
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
+    app: *App,
 ) !void {
     input.clearRetainingCapacity();
     cursor_pos.* = 0;
@@ -45,6 +46,7 @@ fn runSlashCommand(
     switch (action) {
         .provider => provider_picker.open(),
         .model => try model_picker.open(alloc),
+        .clear => app.clearHistory(),
     }
 }
 
@@ -288,7 +290,7 @@ pub fn main() !void {
                         try app.resolveToolConfirmation(alloc, app.tool_confirmation.cursor);
                     } else if (command_picker.active) {
                         if (command_picker.selectedCommand()) |command| {
-                            try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker);
+                            try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker, &app);
                         }
                         command_picker.reset(alloc);
                     } else if (at_picker.active and at_picker.results.items.len > 0) {

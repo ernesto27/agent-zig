@@ -1,58 +1,10 @@
 
 [x] - basic read tool file
-[] - show thinking
+[x] - show thinking
 [x] - show code before accept- deny
-[] - tool could not create child folders
+[] - tool for search internet
+[x] - clear conversation 
 
-
-================================================================================
-  PHASE 1 — Minimal Chat Loop (MVP)
-  Goal: Talk to an LLM from the terminal
-================================================================================
-
-  [x] Project scaffolding
-      - Creata base project , with tui libvaxis
-
-  [x] Basic TUI layout (from existing tui/ code)
-      - Chat message area (scrollable)
-      - Input field at bottom (multi-line later)
-      - Status bar (model name, token count)
-      - Keybindings: Enter=send, Ctrl+C=quit, Esc=cancel generation
-
-  [x] HTTP client for LLM API
-      - Implement HTTPS POST requests using Zig std.http.Client
-      - Support streaming responses (SSE / Server-Sent Events)
-      - Parse JSON responses (use std.json)
-      - Start withi  Anthropic Claude API (Messages API)
-        - POST https://api.anthropic.com/v1/messages
-        - Headers: x-api-key, anthropic-version, content-type
-        - Streaming: stream=true, parse event: content_block_delta
-
-  [ ] Configuration
-      - Optional: read from ~/.config/agent/config.json
-      - Model selection (default: claude-sonnet-4-6)
-
-
-
-  [ ] Conversation state
-      - In-memory message history (user/assistant roles)
-      - Send full conversation context with each request
-      - Display streaming tokens as they arrive
-
-  DELIVERABLE: A terminal app where you type a message, it streams a
-  response from Claude, and you can have a multi-turn conversation.
-
-================================================================================
-  PHASE 2 — Tool System (File Operations)
-  Goal: Let the LLM read and write files
-================================================================================
-
-  [ ] Tool execution framework
-      - Define Tool interface: name, description, input_schema, execute()
-      - Tool registry (register tools at startup)
-      - Parse tool_use blocks from Claude API response
-      - Send tool_result blocks back in conversation
-      - Handle tool call chains (LLM calls tool → result → LLM continues)
 
   [ ] Built-in tools — File operations
       - read:  Read file contents (with line range support)
@@ -62,10 +14,6 @@
       - grep:  Search file contents with pattern matching
       - list:  Directory listing
 
-  [ ] Tool permission system
-      - Per-tool permission modes: allow, ask, deny
-      - TUI prompt for "ask" mode (Y/n confirmation)
-      - Default: read tools = allow, write tools = ask, bash = ask
 
   [ ] TUI enhancements
       - Display tool calls in chat (collapsible sections)
@@ -75,18 +23,6 @@
   DELIVERABLE: The agent can autonomously read your codebase, suggest edits,
   and apply them with your approval.
 
-================================================================================
-  PHASE 3 — Shell Execution & Agentic Loop
-  Goal: Run commands and iterate on errors autonomously
-================================================================================
-
-  [ ] Bash tool
-      - Execute shell commands (already have executeCommand from tui/)
-      - Capture stdout, stderr, exit code
-      - Timeout support (configurable, default 120s)
-      - Working directory management
-      - Environment variable passthrough
-      - Dangerous command detection (rm -rf, git push --force, etc.)
 
   [ ] Agentic loop
       - Allow LLM to chain multiple tool calls
