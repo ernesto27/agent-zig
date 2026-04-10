@@ -79,6 +79,27 @@ const bash_schema_json =
     \\}
 ;
 
+const grep_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "pattern": {
+    \\      "type": "string",
+    \\      "description": "Literal text to search for"
+    \\    },
+    \\    "path": {
+    \\      "type": "string",
+    \\      "description": "File or directory path to search. Defaults to current directory."
+    \\    },
+    \\    "include": {
+    \\      "type": "string",
+    \\      "description": "Optional filename filter like *.zig, .zig, or tools.zig"
+    \\    }
+    \\  },
+    \\  "required": ["pattern"]
+    \\}
+;
+
 const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
@@ -110,6 +131,12 @@ const tool_specs = [_]ToolSpec{
         .description = "Run a shell command and return its output. Use for file system operations, running tests, compiling code, etc.",
         .schema_json = bash_schema_json,
         .required = &.{"command"},
+    },
+    .{
+        .name = "grep",
+        .description = "Search file contents for a literal text pattern. Returns matching file paths, line numbers, and lines.",
+        .schema_json = grep_schema_json,
+        .required = &.{"pattern"},
     },
 };
 
@@ -143,6 +170,9 @@ pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.j
     }
     if (std.mem.eql(u8, tool_name, "bash")) {
         return runBash(allocator, input);
+    }
+    if (std.mem.eql(u8, tool_name, "grep")) {
+        return runGrep(allocator, input);
     }
 
     return .{
@@ -331,4 +361,171 @@ fn runBash(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
             return .{ .content = "Out of memory", .is_error = true };
 
     return .{ .content = output, .is_error = exit_code != 0 };
+}
+
+fn runGrep(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
+    const pattern = getStringField(input, "pattern") orelse return .{ .content = "Invalid input: expected { pattern: string, path?: string, include?: string }", .is_error = true };
+    if (pattern.len == 0) {
+        return .{ .content = "Pattern must not be empty", .is_error = true };
+    }
+
+    const search_path = getStringField(input, "path") orelse ".";
+    const include = getStringField(input, "include");
+
+    log.info("running grep: pattern='{s}' path='{s}'", .{ pattern, search_path });
+
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    const abs_path = std.fs.path.isAbsolute(search_path);
+    const dir_result = if (abs_path)
+        std.fs.openDirAbsolute(search_path, .{ .iterate = true })
+    else
+        std.fs.cwd().openDir(search_path, .{ .iterate = true });
+
+    if (dir_result) |dir| {
+        var search_dir = dir;
+        defer search_dir.close();
+
+        const display_prefix = if (std.mem.eql(u8, search_path, ".")) "" else search_path;
+        walkAndSearch(allocator, search_dir, display_prefix, pattern, include, &out) catch |err| {
+            const msg = std.fmt.allocPrint(allocator, "Search failed: {}", .{err}) catch
+                return .{ .content = "Search failed", .is_error = true };
+            return .{ .content = msg, .is_error = true };
+        };
+    } else |_| {
+        searchSingleFilePath(allocator, &out, search_path, search_path, pattern, include) catch |err| {
+            const msg = std.fmt.allocPrint(allocator, "Search failed: {}", .{err}) catch
+                return .{ .content = "Search failed", .is_error = true };
+            return .{ .content = msg, .is_error = true };
+        };
+    }
+
+    if (out.items.len == 0) {
+        const empty = allocator.dupe(u8, "No matches found") catch return .{ .content = "No matches found" };
+        return .{ .content = empty };
+    }
+
+    const owned = out.toOwnedSlice(allocator) catch return .{ .content = "Out of memory", .is_error = true };
+    return .{ .content = owned };
+}
+
+fn walkAndSearch(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    display_prefix: []const u8,
+    pattern: []const u8,
+    include: ?[]const u8,
+    out: *std.ArrayList(u8),
+) !void {
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.name.len > 0 and entry.name[0] == '.') continue;
+
+        const display_path = if (display_prefix.len == 0)
+            try allocator.dupe(u8, entry.name)
+        else
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ display_prefix, entry.name });
+        defer allocator.free(display_path);
+
+        switch (entry.kind) {
+            .directory => {
+                var sub = dir.openDir(entry.name, .{ .iterate = true }) catch continue;
+                defer sub.close();
+                try walkAndSearch(allocator, sub, display_path, pattern, include, out);
+            },
+            .file => try searchSingleFileInDir(allocator, out, dir, entry.name, display_path, pattern, include),
+            else => {},
+        }
+    }
+}
+
+fn searchSingleFilePath(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    open_path: []const u8,
+    display_path: []const u8,
+    pattern: []const u8,
+    include: ?[]const u8,
+) !void {
+    if (!matchesInclude(display_path, include)) return;
+
+    const file = (if (std.fs.path.isAbsolute(open_path))
+        std.fs.openFileAbsolute(open_path, .{})
+    else
+        std.fs.cwd().openFile(open_path, .{})) catch |err| switch (err) {
+        error.IsDir => return,
+        else => return err,
+    };
+    defer file.close();
+
+    try appendFileMatches(allocator, out, file, display_path, pattern);
+}
+
+fn searchSingleFileInDir(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    dir: std.fs.Dir,
+    entry_name: []const u8,
+    display_path: []const u8,
+    pattern: []const u8,
+    include: ?[]const u8,
+) !void {
+    if (!matchesInclude(display_path, include)) return;
+
+    const file = dir.openFile(entry_name, .{}) catch |err| switch (err) {
+        error.IsDir => return,
+        else => return err,
+    };
+    defer file.close();
+
+    try appendFileMatches(allocator, out, file, display_path, pattern);
+}
+
+fn appendFileMatches(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    file: std.fs.File,
+    display_path: []const u8,
+    pattern: []const u8,
+) !void {
+    const max_size = 1 * 1024 * 1024;
+    const contents = file.readToEndAlloc(allocator, max_size) catch |err| switch (err) {
+        error.FileTooBig => return,
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    if (isProbablyBinary(contents)) return;
+
+    var line_iter = std.mem.splitScalar(u8, contents, '\n');
+    var line_number: usize = 1;
+    while (line_iter.next()) |line| : (line_number += 1) {
+        const trimmed = std.mem.trimRight(u8, line, "\r");
+        if (std.mem.indexOf(u8, trimmed, pattern) == null) continue;
+
+        const match_line = try std.fmt.allocPrint(allocator, "{s}:{d}: {s}\n", .{ display_path, line_number, trimmed });
+        defer allocator.free(match_line);
+        try out.appendSlice(allocator, match_line);
+    }
+}
+
+fn matchesInclude(path: []const u8, include: ?[]const u8) bool {
+    const rule = include orelse return true;
+
+    if (std.mem.startsWith(u8, rule, "*.")) {
+        return std.mem.endsWith(u8, path, rule[1..]);
+    }
+    if (rule.len > 0 and rule[0] == '.') {
+        return std.mem.endsWith(u8, path, rule);
+    }
+    return std.mem.eql(u8, std.fs.path.basename(path), rule);
+}
+
+fn isProbablyBinary(contents: []const u8) bool {
+    const sample_len = @min(contents.len, 512);
+    for (contents[0..sample_len]) |byte| {
+        if (byte == 0) return true;
+    }
+    return false;
 }

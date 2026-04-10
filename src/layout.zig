@@ -12,17 +12,23 @@ pub const Layout = struct {
 pub fn compute(screen_height: u16, app: *App) Layout {
     const input_box_h: u16 = 3; // top border + 1 content row + bottom border
     const chat_y: u16 = 1;
+    const show_grep_panel = app.grep_status.pattern.len > 0 or
+        (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "grep"));
+
     const preview_h: u16 = if (app.tool_confirmation.pending) blk: {
         const content_lines: usize = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file"))
             std.mem.count(u8, app.tool_confirmation.content, "\n") + 1
         else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "edit_file"))
             std.mem.count(u8, app.tool_confirmation.old_string, "\n") +
                 std.mem.count(u8, app.tool_confirmation.new_string, "\n") + 2
+        else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "grep"))
+            4
         else
             1;
         const needed: u16 = @intCast(@min(content_lines + 6, 20));
         break :blk @max(needed, 8);
-    } else 0;
+    } else if (show_grep_panel) 8 else 0;
+
     const chat_h_total: u16 = if (screen_height > 1 + input_box_h + preview_h + 1)
         screen_height - 1 - input_box_h - preview_h - 1
     else

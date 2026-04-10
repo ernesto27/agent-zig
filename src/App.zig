@@ -26,6 +26,12 @@ pub const ToolConfirmation = struct {
     cursor: ConfirmationAction = .approve,
 };
 
+pub const GrepStatus = struct {
+    pattern: []const u8 = "",
+    path: []const u8 = ".",
+    include: []const u8 = "",
+};
+
 pub const ConfirmationAction = enum { approve, deny, accept_all };
 
 tool_confirmation: ToolConfirmation = .{},
@@ -39,6 +45,7 @@ mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
 tool_status: ?[]const u8 = null,
+grep_status: GrepStatus = .{},
 cancel_requested: bool = false,
 
 const App = @This();
@@ -288,6 +295,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             if (err == error.RequestCancelled) {
                 self.is_loading = false;
                 self.tool_status = null;
+                self.grep_status = .{};
                 self.cancel_requested = false;
                 self.needs_redraw = true;
                 self.mutex.unlock();
@@ -433,6 +441,19 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
                 }
             }
 
+            if (std.mem.eql(u8, tool_use.name, "grep")) {
+                self.mutex.lock();
+                self.tool_status = tool_use.name;
+                self.grep_status = .{
+                    .pattern = agent.tools.getStringField(tool_use.input, "pattern") orelse "",
+                    .path = agent.tools.getStringField(tool_use.input, "path") orelse ".",
+                    .include = agent.tools.getStringField(tool_use.input, "include") orelse "",
+                };
+                self.needs_redraw = true;
+                self.mutex.unlock();
+                wakeLoop(loop);
+            }
+
             const result = agent.tools.execute(alloc, tool_use.name, tool_use.input);
             log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
             tool_results[i] = .{
@@ -460,6 +481,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
     self.mutex.lock();
     self.is_loading = false;
     self.tool_status = null;
+    self.grep_status = .{};
     self.cancel_requested = false;
     self.needs_redraw = true;
     self.mutex.unlock();

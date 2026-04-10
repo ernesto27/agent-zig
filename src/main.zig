@@ -586,9 +586,15 @@ pub fn main() !void {
 
         // Input box with border
         // Preview panel
-        if (app.tool_confirmation.pending) {
+        const show_grep_panel = !app.tool_confirmation.pending and app.grep_status.pattern.len > 0;
+
+        if (app.tool_confirmation.pending or show_grep_panel) {
             const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
             const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
+            const is_grep = if (app.tool_confirmation.pending)
+                std.mem.eql(u8, app.tool_confirmation.tool_name, "grep")
+            else
+                true;
             const preview_win = win.child(.{
                 .x_off = 0,
                 .y_off = layout.preview_y,
@@ -598,8 +604,8 @@ pub fn main() !void {
             });
             var title_buf: [256]u8 = undefined;
             const title = std.fmt.bufPrint(&title_buf, " {s} {s} ", .{
-                if (is_bash) "Run:" else if (is_write) "New file:" else "Editing:",
-                app.tool_confirmation.file_path,
+                if (is_bash) "Run:" else if (is_grep) "Grep Tool (params):" else if (is_write) "New file:" else "Editing:",
+                if (is_grep) app.grep_status.path else app.tool_confirmation.file_path,
             }) catch " Preview ";
             _ = preview_win.printSegment(.{
                 .text = title,
@@ -609,7 +615,40 @@ pub fn main() !void {
             const sel_row = preview_win.height -| 3;
             const preview_content_end = sel_row;
 
-            if (is_bash) {
+            if (is_grep) {
+                var grep_bufs: [3][512]u8 = undefined;
+                var grep_row: u16 = 1;
+                if (app.grep_status.pattern.len > 0) {
+                    const grep_pattern = std.fmt.bufPrint(&grep_bufs[0], " pattern: {s}", .{app.grep_status.pattern}) catch " pattern: ";
+                    _ = preview_win.printSegment(.{
+                        .text = grep_pattern,
+                        .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
+                    }, .{ .row_offset = grep_row, .col_offset = 1 });
+                    grep_row += 1;
+                }
+                if (app.grep_status.path.len > 0) {
+                    const grep_path = std.fmt.bufPrint(&grep_bufs[1], " path: {s}", .{app.grep_status.path}) catch " path: .";
+                    _ = preview_win.printSegment(.{
+                        .text = grep_path,
+                        .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xFF } } },
+                    }, .{ .row_offset = grep_row, .col_offset = 1 });
+                    grep_row += 1;
+                }
+                if (app.grep_status.include.len > 0) {
+                    const grep_include = std.fmt.bufPrint(&grep_bufs[2], " include: {s}", .{app.grep_status.include}) catch " include: ";
+                    _ = preview_win.printSegment(.{
+                        .text = grep_include,
+                        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xE0, 0xA0 } } },
+                    }, .{ .row_offset = grep_row, .col_offset = 1 });
+                    grep_row += 1;
+                }
+
+                _ = preview_win.printSegment(.{
+                    .text = " Searching with current grep parameters...",
+                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+                }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
+
+            } else if (is_bash) {
                 _ = preview_win.printSegment(.{
                     .text = " Do you want to proceed?",
                     .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
@@ -663,19 +702,21 @@ pub fn main() !void {
             }
 
             // Shared selector at the bottom of the preview panel
-            const confirm_options = [_]struct { label: []const u8, action: App.ConfirmationAction }{
-                .{ .label = "1. Yes", .action = .approve },
-                .{ .label = "2. No", .action = .deny },
-                .{ .label = "3. Accept all", .action = .accept_all },
-            };
-            var opt_bufs: [3][32]u8 = undefined;
-            for (confirm_options, 0..) |opt, idx| {
-                const selected = app.tool_confirmation.cursor == opt.action;
-                const text = std.fmt.bufPrint(&opt_bufs[idx], "{s}{s}", .{ if (selected) " ❯ " else "   ", opt.label }) catch opt.label;
-                _ = preview_win.printSegment(.{
-                    .text = text,
-                    .style = .{ .fg = if (selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = selected },
-                }, .{ .row_offset = sel_row + @as(u16, @intCast(idx)), .col_offset = 1 });
+            if (app.tool_confirmation.pending) {
+                const confirm_options = [_]struct { label: []const u8, action: App.ConfirmationAction }{
+                    .{ .label = "1. Yes", .action = .approve },
+                    .{ .label = "2. No", .action = .deny },
+                    .{ .label = "3. Accept all", .action = .accept_all },
+                };
+                var opt_bufs: [3][32]u8 = undefined;
+                for (confirm_options, 0..) |opt, idx| {
+                    const selected = app.tool_confirmation.cursor == opt.action;
+                    const text = std.fmt.bufPrint(&opt_bufs[idx], "{s}{s}", .{ if (selected) " ❯ " else "   ", opt.label }) catch opt.label;
+                    _ = preview_win.printSegment(.{
+                        .text = text,
+                        .style = .{ .fg = if (selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = selected },
+                    }, .{ .row_offset = sel_row + @as(u16, @intCast(idx)), .col_offset = 1 });
+                }
             }
         }
 
