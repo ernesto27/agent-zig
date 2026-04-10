@@ -1,6 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
+const build_options = @import("build_options");
 const App = @import("App.zig");
 const chat_selection = @import("chat_selection.zig");
 const layout_mod = @import("layout.zig");
@@ -12,6 +13,7 @@ const provider_picker_mod = @import("provider_picker.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
+const app_version = build_options.version;
 
 // File logger — written before main() opens the log file
 var log_file: ?std.fs.File = null;
@@ -767,6 +769,11 @@ pub fn main() !void {
         const status_row: u16 = if (vx.screen.height == 0) 0 else vx.screen.height - 1;
         const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
         var status_buf: [128]u8 = undefined;
+        var status_right_reserved: u16 = 0;
+
+        const version_text = " " ++ app_version ++ " ";
+        const version_col = vx.screen.width -| @as(u16, @intCast(version_text.len)) -| 1;
+        status_right_reserved = @as(u16, @intCast(version_text.len));
 
         // Model name — highlighted
         var res = win.printSegment(.{
@@ -778,6 +785,7 @@ pub fn main() !void {
         if (app.tool_confirmation.cursor == .accept_all) {
             const badge = " accept-all  ctrl+a to reset ";
             const badge_col = vx.screen.width -| @as(u16, @intCast(badge.len)) -| 1;
+            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(badge.len)));
             _ = win.printSegment(.{
                 .text = badge,
                 .style = .{ .bg = .{ .rgb = .{ 0x20, 0x80, 0x40 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
@@ -789,6 +797,7 @@ pub fn main() !void {
             var effort_buf: [32]u8 = undefined;
             const effort_text = std.fmt.bufPrint(&effort_buf, " thinking:{s} ", .{llm_client.config.effort.label()}) catch " thinking ";
             const effort_col = vx.screen.width -| @as(u16, @intCast(effort_text.len)) -| 1;
+            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(effort_text.len)));
             _ = win.printSegment(.{
                 .text = effort_text,
                 .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
@@ -817,6 +826,13 @@ pub fn main() !void {
             .text = footer_text,
             .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
+
+        if (version_col > res.col and version_col >= status_right_reserved) {
+            _ = win.printSegment(.{
+                .text = version_text,
+                .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            }, .{ .row_offset = status_row, .col_offset = version_col });
+        }
 
         try vx.render(tty.writer());
         app.needs_redraw = false;
