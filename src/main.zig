@@ -354,7 +354,7 @@ pub fn main() !void {
                         const user_text = try alloc.dupe(u8, input.items);
                         try app.messages.append(alloc, .{ .role = .user, .content = user_text });
                         try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
-                        app.is_loading = true;
+                        app.setLoading(true);
                         app.mutex.unlock();
 
                         try history.append(alloc, try alloc.dupe(u8, input.items));
@@ -781,7 +781,7 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
             }, .{ .row_offset = 0, .col_offset = 1 });
         } else {
-            const prompt = if (app.is_loading) ui.loadingFrame() else "> ";
+            const prompt = if (app.is_loading) ui.loading(app.getElapsedSeconds() orelse 0) else "> ";
             _ = input_win.printSegment(.{
                 .text = prompt,
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },

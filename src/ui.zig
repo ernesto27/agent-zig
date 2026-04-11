@@ -57,10 +57,15 @@ pub fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_
     return lines;
 }
 
-pub fn loadingFrame() []const u8 {
+var loadingBuf: [32]u8 = undefined;
+
+pub fn loading(elapsed_secs: usize) []const u8 {
     const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };
     const now_ms: u64 = @intCast(std.time.milliTimestamp());
-    return frames[(now_ms / 120) % frames.len];
+    const frame = frames[(now_ms / 120) % frames.len];
+
+    const result = std.fmt.bufPrint(&loadingBuf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame;
+    return result;
 }
 
 pub fn wakeLoop(loop: *EventLoop) void {

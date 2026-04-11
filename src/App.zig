@@ -44,6 +44,7 @@ pending_attachments: std.ArrayList([]u8),
 system_prompt: agent.system_prompt.SystemPrompt = .{},
 mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
+start_time: ?i64 = null,
 needs_redraw: bool = true,
 tool_status: ?[]const u8 = null,
 grep_status: GrepStatus = .{},
@@ -65,6 +66,17 @@ pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
         .pending_attachments = .{},
         .system_prompt = sp,
     };
+}
+
+pub fn getElapsedSeconds(self: *App) ?usize {
+    const start = self.start_time orelse return null;
+    const now = std.time.timestamp();
+    return @intCast(@max(0, now - start));
+}
+
+pub fn setLoading(self: *App, loading: bool) void {
+    self.is_loading = loading;
+    self.start_time = if (loading) std.time.timestamp() else null;
 }
 
 fn freeMessages(self: *App) void {
@@ -231,7 +243,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         var out = std.ArrayList(u8){};
         out.appendSlice(alloc, last_user_msg) catch {
             out.deinit(alloc);
-            self.is_loading = false;
+            self.setLoading(false);
             self.mutex.unlock();
             return;
         };
@@ -255,7 +267,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
         self.clearPendingAttachments();
         break :blk out.toOwnedSlice(alloc) catch {
             out.deinit(alloc);
-            self.is_loading = false;
+            self.setLoading(false);
             self.mutex.unlock();
             return;
         };
@@ -301,7 +313,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             log.err("sendMessageStreaming failed: {}", .{err});
             self.mutex.lock();
             if (err == error.RequestCancelled) {
-                self.is_loading = false;
+                self.setLoading(false);
                 self.tool_status = null;
                 self.grep_status = .{};
                 self.cancel_requested = false;
@@ -487,7 +499,7 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
 
     // Done
     self.mutex.lock();
-    self.is_loading = false;
+    self.setLoading(false);
     self.tool_status = null;
     self.grep_status = .{};
     self.cancel_requested = false;
