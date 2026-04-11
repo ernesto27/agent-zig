@@ -186,15 +186,16 @@ pub const Client = struct {
         allocator: std.mem.Allocator,
         messages: []const message.Message,
         tools: []const message.ToolDefinition,
+        system_prompt: ?[]const u8,
         ctx: *anyopaque,
         on_chunk: *const fn (*anyopaque, []const u8) void,
         on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
         should_cancel: CancelFn,
     ) !std.json.Parsed(message.MessagesResponse) {
         if (std.mem.eql(u8, self.config.provider_name, "OpenAI")) {
-            return self.sendMessageStreamingOpenAI(allocator, messages, tools, ctx, on_chunk, should_cancel);
+            return self.sendMessageStreamingOpenAI(allocator, messages, tools, system_prompt, ctx, on_chunk, should_cancel);
         }
-        return self.sendMessageStreamingAnthropic(allocator, messages, tools, ctx, on_chunk, on_thinking_chunk, should_cancel);
+        return self.sendMessageStreamingAnthropic(allocator, messages, tools, system_prompt, ctx, on_chunk, on_thinking_chunk, should_cancel);
     }
 
     fn sendMessageStreamingAnthropic(
@@ -202,6 +203,7 @@ pub const Client = struct {
         allocator: std.mem.Allocator,
         messages: []const message.Message,
         tools: []const message.ToolDefinition,
+        system_prompt: ?[]const u8,
         ctx: *anyopaque,
         on_chunk: *const fn (*anyopaque, []const u8) void,
         on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
@@ -211,6 +213,7 @@ pub const Client = struct {
         const req_body = message.MessagesRequest{
             .model = self.config.model,
             .messages = messages,
+            .system = system_prompt,
             .stream = true,
             .tools = tools,
             .effort = self.config.effort,
@@ -298,11 +301,12 @@ pub const Client = struct {
         allocator: std.mem.Allocator,
         messages: []const message.Message,
         tools: []const message.ToolDefinition,
+        system_prompt: ?[]const u8,
         ctx: *anyopaque,
         on_chunk: *const fn (*anyopaque, []const u8) void,
         should_cancel: CancelFn,
     ) !std.json.Parsed(message.MessagesResponse) {
-        const body = try buildOpenAIRequestBody(allocator, self.config.model, messages, tools, true);
+        const body = try buildOpenAIRequestBody(allocator, self.config.model, messages, tools, system_prompt, true);
         defer allocator.free(body);
 
         const pretty_req = prettyJson(allocator, body) catch body;
@@ -938,6 +942,7 @@ fn buildOpenAIRequestBody(
     model: []const u8,
     messages: []const message.Message,
     tools: []const message.ToolDefinition,
+    system_prompt: ?[]const u8,
     stream: bool,
 ) ![]u8 {
     var out = std.ArrayList(u8){};
@@ -991,6 +996,17 @@ fn buildOpenAIRequestBody(
     try out.append(allocator, '[');
 
     var first_msg = true;
+    if (system_prompt) |sp| {
+        try out.appendSlice(allocator, "{");
+        try appendObjectFieldName(allocator, &out, "role");
+        try appendJsonString(allocator, &out, "system");
+        try out.append(allocator, ',');
+        try appendObjectFieldName(allocator, &out, "content");
+        try appendJsonString(allocator, &out, sp);
+        try out.append(allocator, '}');
+        first_msg = false;
+    }
+
     for (messages) |msg| {
         switch (msg.content) {
             .text => |text| {

@@ -41,6 +41,7 @@ messages: std.ArrayList(Message),
 llm_history: std.ArrayList(agent.llm.Message),
 llm_client: *agent.llm.Client,
 pending_attachments: std.ArrayList([]u8),
+system_prompt: agent.system_prompt.SystemPrompt = .{},
 mutex: std.Thread.Mutex = .{},
 is_loading: bool = false,
 needs_redraw: bool = true,
@@ -52,12 +53,17 @@ const App = @This();
 const log = std.log.scoped(.app);
 
 pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) App {
+    var sp = agent.system_prompt.SystemPrompt{};
+    sp.readContent(alloc) catch |err| {
+        log.err("failed to load system prompt: {}", .{err});
+    };
     return .{
         .alloc = alloc,
         .messages = .{},
         .llm_history = .{},
         .llm_client = client,
         .pending_attachments = .{},
+        .system_prompt = sp,
     };
 }
 
@@ -87,6 +93,7 @@ pub fn deinit(self: *App) void {
     self.llm_history.deinit(self.alloc);
     self.clearPendingAttachments();
     self.pending_attachments.deinit(self.alloc);
+    self.system_prompt.deinit(self.alloc);
 }
 
 fn clearPendingAttachments(self: *App) void {
@@ -289,7 +296,8 @@ pub fn fetchAiResponse(self: *App, loop: *EventLoop) void {
             }
         }
 
-        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
+        const system = if (self.system_prompt.content.len > 0) self.system_prompt.content else null;
+        const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, system, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
             log.err("sendMessageStreaming failed: {}", .{err});
             self.mutex.lock();
             if (err == error.RequestCancelled) {

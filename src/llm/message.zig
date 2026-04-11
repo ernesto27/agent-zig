@@ -64,6 +64,7 @@ pub const Message = struct {
 pub const MessagesRequest = struct {
     model: []const u8,
     messages: []const Message,
+    system: ?[]const u8 = null,
     max_tokens: u32 = 8096,
     stream: bool = false,
     tools: []const ToolDefinition = &.{},
@@ -77,6 +78,10 @@ pub const MessagesRequest = struct {
         try jw.write(self.model);
         try jw.objectField("max_tokens");
         try jw.write(self.max_tokens);
+        if (self.system) |s| {
+            try jw.objectField("system");
+            try jw.write(s);
+        }
         try jw.objectField("messages");
         try jw.write(self.messages);
         if (self.stream) {

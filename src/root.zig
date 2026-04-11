@@ -5,6 +5,7 @@ pub const llm = @import("llm.zig");
 pub const config = @import("config.zig");
 pub const markdown = @import("markdown.zig");
 pub const tools = @import("tools.zig");
+pub const system_prompt = @import("system_prompt.zig");
 
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you
