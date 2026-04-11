@@ -1,5 +1,5 @@
 const std = @import("std");
-const App = @import("App.zig");
+const App = @import("App.zig").App;
 
 pub const Layout = struct {
     chat_y: u16,

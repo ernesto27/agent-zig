@@ -1,6 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const App = @import("App.zig");
+const App = @import("App.zig").App;
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);

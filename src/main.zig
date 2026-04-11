@@ -2,7 +2,8 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const build_options = @import("build_options");
-const App = @import("App.zig");
+const app_mod = @import("App.zig");
+const App = app_mod.App;
 const chat_selection = @import("chat_selection.zig");
 const layout_mod = @import("layout.zig");
 const ui = @import("ui.zig");
@@ -647,7 +648,6 @@ pub fn main() !void {
                     .text = " Searching with current grep parameters...",
                     .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
                 }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
-
             } else if (is_bash) {
                 _ = preview_win.printSegment(.{
                     .text = " Do you want to proceed?",
@@ -703,7 +703,7 @@ pub fn main() !void {
 
             // Shared selector at the bottom of the preview panel
             if (app.tool_confirmation.pending) {
-                const confirm_options = [_]struct { label: []const u8, action: App.ConfirmationAction }{
+                const confirm_options = [_]struct { label: []const u8, action: app_mod.ConfirmationAction }{
                     .{ .label = "1. Yes", .action = .approve },
                     .{ .label = "2. No", .action = .deny },
                     .{ .label = "3. Accept all", .action = .accept_all },

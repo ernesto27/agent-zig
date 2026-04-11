@@ -1,7 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
-const App = @import("App.zig");
+const App = @import("App.zig").App;
 const ui = @import("ui.zig");
 
 const Allocator = std.mem.Allocator;
