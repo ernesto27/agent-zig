@@ -24,8 +24,5 @@ mkdir -p "$DIST_DIR"
 build_target "x86_64-linux-musl" "$DIST_DIR/linux"
 build_target "aarch64-macos" "$DIST_DIR/macos"
 
-
-printf '\nArtifacts:\n'
-printf '  %s\n' "$MACOS_BIN"
-printf '\nInstalled:\n'
-printf '  %s\n' "/usr/local/bin/agent-zig"
+printf 'Installing %s -> /usr/local/bin/agent-zig\n' "$LINUX_BIN"
+sudo cp "$LINUX_BIN" /usr/local/bin/agent-zig

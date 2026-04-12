@@ -12,27 +12,13 @@ const command_picker_mod = @import("command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 
+const log_mod = @import("log.zig");
+
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 const app_version = build_options.version;
 
-// File logger — written before main() opens the log file
-var log_file: ?std.fs.File = null;
-
-pub const std_options: std.Options = .{ .logFn = logToFile };
-
-fn logToFile(
-    comptime level: std.log.Level,
-    comptime scope: @TypeOf(.enum_literal),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    const f = log_file orelse return;
-    const prefix = comptime "[" ++ @tagName(level) ++ "] (" ++ @tagName(scope) ++ ") ";
-    var buf: [1024 * 1024]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, prefix ++ format ++ "\n", args) catch return;
-    f.writeAll(msg) catch {};
-}
+pub const std_options: std.Options = .{ .logFn = log_mod.Logger.logToFile };
 
 fn runSlashCommand(
     alloc: std.mem.Allocator,
@@ -78,12 +64,12 @@ fn handleEscape(
 }
 
 pub fn main() !void {
-    log_file = try std.fs.cwd().createFile("agent.log", .{ .truncate = true });
-    defer log_file.?.close();
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+
+    try log_mod.Logger.init(alloc);
+    defer log_mod.Logger.deinit();
 
     const parsed_config = agent.config.load(alloc) catch {
         std.debug.print("Failed to load config. Create ~/.config/agent-zig/config.jhison\n", .{});

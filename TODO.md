@@ -1,14 +1,29 @@
 
-[x] - basic read tool file
+[x] - basic read tool file/
 [x] - show thinking
 [x] - show code before accept- deny
 [] - tool for search internet
 [x] - clear conversation 
+[] - agent.log must be save in .config folder
+[] - refactor render 
+[] - init command
+[] - paset larget text crash
+[] - drag stop working
+[] - somethimes code preview does not show 
+[] - refactor providers llms services
+[] - when think or executing show time counter
+[] - save conversations to resume
+[] - add arena options to have two models or more doint same task in paraller
+
+// read file claude.md or agents.md
+
+
+
 
 
   [ ] Built-in tools — File operations
       - read:  Read file contents (with line range support)
-      - write: Create/overwrite files
+      - write: Create/overwrite filesbash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)" -s --source qwenchat
       - edit:  String replacement in files (old_string → new_string)
       - glob:  Find files by pattern (use std.fs.Dir.walk)
       - grep:  Search file contents with pattern matching
