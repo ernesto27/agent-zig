@@ -5,6 +5,7 @@ pub const Model = struct {
     display: []const u8,
     free: bool = false,
     supports_thinking: bool = false,
+    max_context: u32 = 200_000,
 };
 
 pub const FindResult = struct {

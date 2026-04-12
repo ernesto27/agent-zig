@@ -1,6 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
+const context_usage_mod = @import("context_usage.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -49,6 +50,7 @@ pub const App = struct {
     tool_status: ?[]const u8 = null,
     grep_status: GrepStatus = .{},
     cancel_requested: bool = false,
+    context_usage: context_usage_mod.contextUsage = .{},
 
     const Self = @This();
     const log = std.log.scoped(.app);
@@ -340,6 +342,10 @@ pub const App = struct {
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             });
+            self.context_usage.tokensCount = @intCast(response.usage.input_tokens + response.usage.output_tokens);
+            if (agent.llm.providers.findModel(self.llm_client.config.model)) |found| {
+                self.context_usage.tokensPercentage = self.context_usage.tokensCount * 100 / found.model.max_context;
+            }
             for (response.content) |block| {
                 if (std.mem.eql(u8, block.type, "text")) {
                     log.info("[assistant] text: {s}", .{block.text orelse ""});

@@ -863,10 +863,11 @@ pub fn main() !void {
             std.fmt.bufPrint(&footer_buf, "{s}  ctrl+q: quit", .{status}) catch " ctrl+q: quit"
         else
             " ctrl+q: quit";
-        _ = win.printSegment(.{
+        res = win.printSegment(.{
             .text = footer_text,
             .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
+        app.context_usage.render(win, res.col, status_row, status_bg);
 
         if (version_col > res.col and version_col >= status_right_reserved) {
             _ = win.printSegment(.{
