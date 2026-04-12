@@ -30,12 +30,12 @@ pub const providers = [_]Provider{
     .{
         .name = "OpenAI",
         .models = &[_]Model{
-            .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true },
-            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true },
-            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true },
-            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano", .supports_thinking = true },
-            .{ .id = "gpt-5", .display = "GPT-5", .supports_thinking = true },
-            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true },
+            .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true, .max_context = 272_000 },
+            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true, .max_context = 272_000 },
+            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true, .max_context = 128_000 },
+            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano", .supports_thinking = true, .max_context = 128_000 },
+            .{ .id = "gpt-5", .display = "GPT-5", .supports_thinking = true, .max_context = 128_000 },
+            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true, .max_context = 128_000 },
         },
     },
 };

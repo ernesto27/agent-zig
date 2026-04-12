@@ -836,9 +836,9 @@ pub fn main() !void {
         // Effort badge — pinned to the right edge, only visible when thinking is on
         if (llm_client.config.effort != .none) {
             var effort_buf: [32]u8 = undefined;
-            const effort_text = std.fmt.bufPrint(&effort_buf, " thinking:{s} ", .{llm_client.config.effort.label()}) catch " thinking ";
-            const effort_col = vx.screen.width -| @as(u16, @intCast(effort_text.len)) -| 1;
-            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(effort_text.len)));
+            const effort_text = std.fmt.bufPrint(&effort_buf, " {s} ", .{llm_client.config.effort.label()}) catch " ? ";
+            const effort_col = version_col -| @as(u16, @intCast(effort_text.len));
+            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(version_text.len + effort_text.len)));
             _ = win.printSegment(.{
                 .text = effort_text,
                 .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
