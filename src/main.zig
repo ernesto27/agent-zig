@@ -18,7 +18,14 @@ const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 const app_version = build_options.version;
 
-pub const std_options: std.Options = .{ .logFn = log_mod.Logger.logToFile };
+pub const std_options: std.Options = .{
+    .logFn = log_mod.Logger.logToFile,
+};
+
+pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    log_mod.Logger.writeCrashReport(msg, trace, ret_addr);
+    std.process.exit(1);
+}
 
 fn runSlashCommand(
     alloc: std.mem.Allocator,
@@ -127,6 +134,7 @@ pub fn main() !void {
     defer vx.exitAltScreen(tty.writer()) catch {};
     try vx.queryTerminal(tty.writer(), 1 * std.time.ns_per_s);
     try vx.setMouseMode(tty.writer(), true);
+    try vx.setBracketedPaste(tty.writer(), true);
 
     if (!vx.state.in_band_resize) try loop.init();
 
@@ -148,12 +156,22 @@ pub fn main() !void {
     var selection: chat_selection.SelectionState = .{};
     var clipboard_status: ?[]const u8 = null;
     var spinner_state = ui.SpinnerState{};
+    var bracketed_paste = false;
+    var paste_buf = std.ArrayList(u8){};
+    defer paste_buf.deinit(alloc);
 
     while (running) {
         const event = loop.nextEvent();
 
         switch (event) {
             .key_press => |key| {
+                if (bracketed_paste) {
+                    if (key.text) |txt| {
+                        try paste_buf.appendSlice(alloc, txt);
+                    }
+                    // Skip redraw during paste — one redraw at paste_end is enough
+                    continue;
+                }
                 if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
                     running = false;
                 } else if (key.matches('t', .{ .ctrl = true })) {
@@ -267,12 +285,17 @@ pub fn main() !void {
                             at_picker.at_start = cursor_pos - 1;
                             try at_picker.refresh(alloc);
                         } else if (at_picker.active) {
-                            at_picker.query.clearRetainingCapacity();
-                            const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
-                            try at_picker.query.appendSlice(alloc, after_at);
-                            try at_picker.refresh(alloc);
+                            // Only refresh @ picker for single-char input during paste
+                            if (txt.len == 1) {
+                                at_picker.query.clearRetainingCapacity();
+                                const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
+                                try at_picker.query.appendSlice(alloc, after_at);
+                                try at_picker.refresh(alloc);
+                            }
                         }
-                        try command_picker.updateFromInput(alloc, input.items);
+                        if (txt.len == 1) {
+                            try command_picker.updateFromInput(alloc, input.items);
+                        }
                     }
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (app.tool_confirmation.pending) {
@@ -359,6 +382,18 @@ pub fn main() !void {
                         const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ &app, &loop });
                         thread.detach();
                     }
+                }
+                app.needs_redraw = true;
+            },
+            .paste_start => {
+                bracketed_paste = true;
+                paste_buf.clearRetainingCapacity();
+            },
+            .paste_end => {
+                bracketed_paste = false;
+                if (paste_buf.items.len > 0) {
+                    try input.insertSlice(alloc, cursor_pos, paste_buf.items);
+                    cursor_pos += paste_buf.items.len;
                 }
                 app.needs_redraw = true;
             },
