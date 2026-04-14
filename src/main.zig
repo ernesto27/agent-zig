@@ -43,6 +43,7 @@ fn runSlashCommand(
         .provider => provider_picker.open(),
         .model => try model_picker.open(alloc),
         .clear => app.clearHistory(),
+        .resume_session => app.sessions.open(),
     }
 }
 
@@ -67,6 +68,8 @@ fn handleEscape(
         model_picker.reset(alloc);
     } else if (provider_picker.active) {
         provider_picker.reset(alloc);
+    } else if (app.sessions.active) {
+        app.sessions.reset();
     }
 }
 
@@ -192,6 +195,12 @@ pub fn main() !void {
                         if (model_picker.selected > 0) model_picker.selected -= 1;
                     } else if (provider_picker.active and provider_picker.phase == .list) {
                         if (provider_picker.selected > 0) provider_picker.selected -= 1;
+                    } else if (app.sessions.active) {
+                        if (app.sessions.selected > 0) {
+                            app.sessions.selected -= 1;
+                            if (app.sessions.selected < app.sessions.scroll)
+                                app.sessions.scroll -= 1;
+                        }
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
                             .approve => .accept_all,
@@ -224,6 +233,12 @@ pub fn main() !void {
                     } else if (provider_picker.active and provider_picker.phase == .list) {
                         if (provider_picker.selected + 1 < model_picker_mod.providers.len)
                             provider_picker.selected += 1;
+                    } else if (app.sessions.active) {
+                        if (app.sessions.selected + 1 < app.sessions.entries.items.len) {
+                            app.sessions.selected += 1;
+                            if (app.sessions.selected >= app.sessions.scroll + @TypeOf(app.sessions).max_visible)
+                                app.sessions.scroll += 1;
+                        }
                     } else if (app.tool_confirmation.pending) {
                         app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
                             .approve => .deny,
@@ -332,6 +347,7 @@ pub fn main() !void {
                         app.llm_client.config.model = selected.id;
                         config.selected = selected.id;
                         if (agent.llm.providers.findModel(selected.id)) |found| {
+                            app.llm_client.config.provider_name = found.provider.name;
                             if (config.forProvider(found.provider.name)) |pc| {
                                 app.llm_client.config.base_url = pc.baseUrl;
                                 app.llm_client.config.api_key = pc.apiKey;
@@ -354,6 +370,20 @@ pub fn main() !void {
                             agent.config.save(alloc, config) catch {};
                         }
                         provider_picker.reset(alloc);
+                    } else if (app.sessions.active and app.sessions.entries.items.len > 0) {
+                        const selected = app.sessions.entries.items[app.sessions.selected];
+                        app.mutex.lock();
+                        if (app.sessions.readFileContent(alloc, selected.filename)) |ctx| {
+                            app.clearHistory();
+                            app.messages.append(alloc, .{ .role = .user, .content = ctx }) catch {};
+                            app.appendToHistory(alloc, ctx) catch {};
+                            app.mutex.unlock();
+                            std.log.info("session content:\n{s}", .{ctx});
+                        } else |err| {
+                            app.mutex.unlock();
+                            std.log.err("failed to read session: {}", .{err});
+                        }
+                        app.sessions.reset();
                     } else if (input.items.len > 0 and !app.is_loading) {
                         app.mutex.lock();
 
@@ -780,6 +810,11 @@ pub fn main() !void {
         // /provider picker overlay
         if (provider_picker.active) {
             provider_picker.render(win, vx.screen.width, vx.screen.height);
+        }
+
+        // /resume session picker overlay
+        if (app.sessions.active) {
+            app.sessions.render(win, vx.screen.width, vx.screen.height);
         }
 
         const input_win = win.child(.{

@@ -4,8 +4,9 @@
 [x] - show code before accept- deny
 [] - tool for search internet
 [x] - clear conversation 
-[] - agent.log must be save in .config folder
+[x] - agent.log must be save in .config folder
 [] - refactor render 
+[] - command show,  is overlap with content text
 [] - init command
 [] - paset larget text crash
 [] - drag stop working

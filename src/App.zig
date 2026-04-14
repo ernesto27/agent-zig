@@ -2,6 +2,7 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const context_usage_mod = @import("context_usage.zig");
+const sessions = @import("sessions.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -43,6 +44,7 @@ pub const App = struct {
     llm_client: *agent.llm.Client,
     pending_attachments: std.ArrayList([]u8),
     system_prompt: agent.system_prompt.SystemPrompt = .{},
+    sessions: sessions.Sessions = .{},
     mutex: std.Thread.Mutex = .{},
     is_loading: bool = false,
     start_time: ?i64 = null,
@@ -60,6 +62,10 @@ pub const App = struct {
         sp.readContent(alloc) catch |err| {
             log.err("failed to load system prompt: {}", .{err});
         };
+        var sess = sessions.Sessions{};
+        sess.init(alloc) catch |err| {
+            log.err("failed to init sessions: {}", .{err});
+        };
         return .{
             .alloc = alloc,
             .messages = .{},
@@ -67,6 +73,7 @@ pub const App = struct {
             .llm_client = client,
             .pending_attachments = .{},
             .system_prompt = sp,
+            .sessions = sess,
         };
     }
 
@@ -95,6 +102,11 @@ pub const App = struct {
         }
     }
 
+    pub fn appendToHistory(self: *Self, alloc: std.mem.Allocator, text: []const u8) !void {
+        const content = try alloc.dupe(u8, text);
+        try self.llm_history.append(alloc, .{ .role = .user, .content = .{ .text = content } });
+    }
+
     pub fn clearHistory(self: *Self) void {
         self.freeMessages();
         self.messages.clearRetainingCapacity();
@@ -108,6 +120,7 @@ pub const App = struct {
         self.clearPendingAttachments();
         self.pending_attachments.deinit(self.alloc);
         self.system_prompt.deinit(self.alloc);
+        self.sessions.deinit();
     }
 
     fn clearPendingAttachments(self: *Self) void {
@@ -279,6 +292,7 @@ pub const App = struct {
             .role = .user,
             .content = .{ .text = user_text },
         }) catch {};
+        self.sessions.appendFmt(alloc, "You: {s}", .{user_text});
         self.mutex.unlock();
 
         // 2. Get tool definitions (arena keeps parsed JSON alive)
@@ -380,10 +394,13 @@ pub const App = struct {
                 // No tools — append assistant text to history and done
                 if (text_buf.items.len > 0) {
                     const duped = alloc.dupe(u8, text_buf.items) catch break;
+                    self.mutex.lock();
                     self.llm_history.append(alloc, .{
                         .role = .assistant,
                         .content = .{ .text = duped },
                     }) catch {};
+                    self.sessions.appendFmt(alloc, "AI: \n{s}", .{duped});
+                    self.mutex.unlock();
                 }
                 break;
             }
