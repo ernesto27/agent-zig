@@ -79,6 +79,23 @@ const bash_schema_json =
     \\}
 ;
 
+const glob_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "pattern": {
+    \\      "type": "string",
+    \\      "description": "Glob pattern to match file paths, such as **/*.zig or src/*.zig"
+    \\    },
+    \\    "path": {
+    \\      "type": "string",
+    \\      "description": "File or directory path to search. Defaults to current directory."
+    \\    }
+    \\  },
+    \\  "required": ["pattern"]
+    \\}
+;
+
 const grep_schema_json =
     \\{
     \\  "type": "object",
@@ -133,6 +150,12 @@ const tool_specs = [_]ToolSpec{
         .required = &.{"command"},
     },
     .{
+        .name = "glob",
+        .description = "Find files by glob pattern. Returns matching file paths, one per line.",
+        .schema_json = glob_schema_json,
+        .required = &.{"pattern"},
+    },
+    .{
         .name = "grep",
         .description = "Search file contents for a literal text pattern. Returns matching file paths, line numbers, and lines.",
         .schema_json = grep_schema_json,
@@ -170,6 +193,9 @@ pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.j
     }
     if (std.mem.eql(u8, tool_name, "bash")) {
         return runBash(allocator, input);
+    }
+    if (std.mem.eql(u8, tool_name, "glob")) {
+        return runGlob(allocator, input);
     }
     if (std.mem.eql(u8, tool_name, "grep")) {
         return runGrep(allocator, input);
@@ -363,6 +389,73 @@ fn runBash(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
     return .{ .content = output, .is_error = exit_code != 0 };
 }
 
+fn runGlob(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
+    const pattern = getStringField(input, "pattern") orelse return .{ .content = "Invalid input: expected { pattern: string, path?: string }", .is_error = true };
+    if (pattern.len == 0) {
+        return .{ .content = "Pattern must not be empty", .is_error = true };
+    }
+
+    const search_path = getStringField(input, "path") orelse ".";
+    log.info("running glob: pattern='{s}' path='{s}'", .{ pattern, search_path });
+
+    var matches = std.ArrayList([]u8){};
+    defer {
+        for (matches.items) |item| allocator.free(item);
+        matches.deinit(allocator);
+    }
+
+    const abs_path = std.fs.path.isAbsolute(search_path);
+    const dir_result = if (abs_path)
+        std.fs.openDirAbsolute(search_path, .{ .iterate = true })
+    else
+        std.fs.cwd().openDir(search_path, .{ .iterate = true });
+
+    if (dir_result) |dir| {
+        var search_dir = dir;
+        defer search_dir.close();
+
+        collectGlobMatches(allocator, search_dir, search_path, abs_path, pattern, &matches) catch |err| {
+            const msg = std.fmt.allocPrint(allocator, "Search failed: {}", .{err}) catch
+                return .{ .content = "Search failed", .is_error = true };
+            return .{ .content = msg, .is_error = true };
+        };
+    } else |_| {
+        const basename = std.fs.path.basename(search_path);
+        if (!globMatchesPath(pattern, basename) and !globMatchesPath(pattern, search_path)) {
+            const empty = allocator.dupe(u8, "No matches found") catch return .{ .content = "No matches found" };
+            return .{ .content = empty };
+        }
+
+        const owned_path = allocator.dupe(u8, search_path) catch return .{ .content = "Out of memory", .is_error = true };
+        matches.append(allocator, owned_path) catch {
+            allocator.free(owned_path);
+            return .{ .content = "Out of memory", .is_error = true };
+        };
+    }
+
+    if (matches.items.len == 0) {
+        const empty = allocator.dupe(u8, "No matches found") catch return .{ .content = "No matches found" };
+        return .{ .content = empty };
+    }
+
+    std.mem.sort([]u8, matches.items, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            return std.mem.lessThan(u8, lhs, rhs);
+        }
+    }.lessThan);
+
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    for (matches.items) |item| {
+        out.appendSlice(allocator, item) catch return .{ .content = "Out of memory", .is_error = true };
+        out.append(allocator, '\n') catch return .{ .content = "Out of memory", .is_error = true };
+    }
+
+    const owned = out.toOwnedSlice(allocator) catch return .{ .content = "Out of memory", .is_error = true };
+    return .{ .content = owned };
+}
+
 fn runGrep(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
     const pattern = getStringField(input, "pattern") orelse return .{ .content = "Invalid input: expected { pattern: string, path?: string, include?: string }", .is_error = true };
     if (pattern.len == 0) {
@@ -408,6 +501,92 @@ fn runGrep(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
 
     const owned = out.toOwnedSlice(allocator) catch return .{ .content = "Out of memory", .is_error = true };
     return .{ .content = owned };
+}
+
+fn collectGlobMatches(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    search_path: []const u8,
+    abs_path: bool,
+    pattern: []const u8,
+    out: *std.ArrayList([]u8),
+) !void {
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!globMatchesPath(pattern, entry.path)) continue;
+
+        const display_path = if (std.mem.eql(u8, search_path, "."))
+            try allocator.dupe(u8, entry.path)
+        else if (abs_path)
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ search_path, entry.path })
+        else
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ search_path, entry.path });
+        errdefer allocator.free(display_path);
+
+        try out.append(allocator, display_path);
+    }
+}
+
+fn globMatchesPath(pattern: []const u8, path: []const u8) bool {
+    return matchPathParts(trimSlashes(pattern), trimSlashes(path));
+}
+
+fn matchPathParts(pattern: []const u8, path: []const u8) bool {
+    if (pattern.len == 0) return path.len == 0;
+
+    const pattern_part = splitFirstPathPart(pattern) orelse return path.len == 0;
+    if (std.mem.eql(u8, pattern_part.part, "**")) {
+        if (matchPathParts(pattern_part.rest, path)) return true;
+        const path_part = splitFirstPathPart(path) orelse return false;
+        return matchPathParts(pattern, path_part.rest);
+    }
+
+    const path_part = splitFirstPathPart(path) orelse return false;
+    if (!matchSegment(pattern_part.part, path_part.part)) return false;
+    return matchPathParts(pattern_part.rest, path_part.rest);
+}
+
+fn matchSegment(pattern: []const u8, value: []const u8) bool {
+    if (pattern.len == 0) return value.len == 0;
+    if (pattern[0] == '*') {
+        var i: usize = 0;
+        while (i <= value.len) : (i += 1) {
+            if (matchSegment(pattern[1..], value[i..])) return true;
+        }
+        return false;
+    }
+    if (value.len == 0 or pattern[0] != value[0]) return false;
+    return matchSegment(pattern[1..], value[1..]);
+}
+
+const PathPart = struct {
+    part: []const u8,
+    rest: []const u8,
+};
+
+fn splitFirstPathPart(path: []const u8) ?PathPart {
+    const trimmed = trimLeadingSlashes(path);
+    if (trimmed.len == 0) return null;
+
+    const idx = std.mem.indexOfScalar(u8, trimmed, '/') orelse {
+        return .{ .part = trimmed, .rest = "" };
+    };
+
+    return .{
+        .part = trimmed[0..idx],
+        .rest = trimmed[idx + 1 ..],
+    };
+}
+
+fn trimSlashes(path: []const u8) []const u8 {
+    return std.mem.trim(u8, path, "/");
+}
+
+fn trimLeadingSlashes(path: []const u8) []const u8 {
+    return std.mem.trimLeft(u8, path, "/");
 }
 
 fn walkAndSearch(

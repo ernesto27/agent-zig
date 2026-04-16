@@ -33,6 +33,24 @@ pub const GrepStatus = struct {
     pattern: []const u8 = "",
     path: []const u8 = ".",
     include: []const u8 = "",
+
+    pub fn deinit(self: *GrepStatus, alloc: std.mem.Allocator) void {
+        if (self.pattern.len > 0) alloc.free(self.pattern);
+        if (self.path.len > 0 and !std.mem.eql(u8, self.path, ".")) alloc.free(self.path);
+        if (self.include.len > 0) alloc.free(self.include);
+        self.* = .{};
+    }
+};
+
+pub const GlobStatus = struct {
+    pattern: []const u8 = "",
+    path: []const u8 = ".",
+
+    pub fn deinit(self: *GlobStatus, alloc: std.mem.Allocator) void {
+        if (self.pattern.len > 0) alloc.free(self.pattern);
+        if (self.path.len > 0 and !std.mem.eql(u8, self.path, ".")) alloc.free(self.path);
+        self.* = .{};
+    }
 };
 
 pub const ConfirmationAction = enum { approve, deny, accept_all };
@@ -53,6 +71,7 @@ pub const App = struct {
     needs_redraw: bool = true,
     tool_status: ?[]const u8 = null,
     grep_status: GrepStatus = .{},
+    glob_status: GlobStatus = .{},
     cancel_requested: bool = false,
     context_usage: context_usage_mod.contextUsage = .{},
 
@@ -126,9 +145,36 @@ pub const App = struct {
         self.messages.deinit(self.alloc);
         self.llm_history.deinit(self.alloc);
         self.clearPendingAttachments();
+        self.grep_status.deinit(self.alloc);
+        self.glob_status.deinit(self.alloc);
         self.pending_attachments.deinit(self.alloc);
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
+    }
+
+    fn setGrepStatus(self: *Self, pattern: []const u8, path: []const u8, include: []const u8) void {
+        self.grep_status.deinit(self.alloc);
+        self.grep_status = .{
+            .pattern = if (pattern.len == 0) "" else (self.alloc.dupe(u8, pattern) catch ""),
+            .path = if (std.mem.eql(u8, path, ".")) "." else (self.alloc.dupe(u8, path) catch "."),
+            .include = if (include.len == 0) "" else (self.alloc.dupe(u8, include) catch ""),
+        };
+    }
+
+    fn clearGrepStatus(self: *Self) void {
+        self.grep_status.deinit(self.alloc);
+    }
+
+    fn setGlobStatus(self: *Self, pattern: []const u8, path: []const u8) void {
+        self.glob_status.deinit(self.alloc);
+        self.glob_status = .{
+            .pattern = if (pattern.len == 0) "" else (self.alloc.dupe(u8, pattern) catch ""),
+            .path = if (std.mem.eql(u8, path, ".")) "." else (self.alloc.dupe(u8, path) catch "."),
+        };
+    }
+
+    fn clearGlobStatus(self: *Self) void {
+        self.glob_status.deinit(self.alloc);
     }
 
     fn clearPendingAttachments(self: *Self) void {
@@ -339,7 +385,8 @@ pub const App = struct {
                 if (err == error.RequestCancelled) {
                     self.setLoading(false);
                     self.tool_status = null;
-                    self.grep_status = .{};
+                    self.clearGrepStatus();
+                    self.clearGlobStatus();
                     self.cancel_requested = false;
                     self.needs_redraw = true;
                     self.mutex.unlock();
@@ -495,11 +542,23 @@ pub const App = struct {
                 if (std.mem.eql(u8, tool_use.name, "grep")) {
                     self.mutex.lock();
                     self.tool_status = tool_use.name;
-                    self.grep_status = .{
-                        .pattern = agent.tools.getStringField(tool_use.input, "pattern") orelse "",
-                        .path = agent.tools.getStringField(tool_use.input, "path") orelse ".",
-                        .include = agent.tools.getStringField(tool_use.input, "include") orelse "",
-                    };
+                    self.setGrepStatus(
+                        agent.tools.getStringField(tool_use.input, "pattern") orelse "",
+                        agent.tools.getStringField(tool_use.input, "path") orelse ".",
+                        agent.tools.getStringField(tool_use.input, "include") orelse "",
+                    );
+                    self.needs_redraw = true;
+                    self.mutex.unlock();
+                    wakeLoop(loop);
+                }
+
+                if (std.mem.eql(u8, tool_use.name, "glob")) {
+                    self.mutex.lock();
+                    self.tool_status = tool_use.name;
+                    self.setGlobStatus(
+                        agent.tools.getStringField(tool_use.input, "pattern") orelse "",
+                        agent.tools.getStringField(tool_use.input, "path") orelse ".",
+                    );
                     self.needs_redraw = true;
                     self.mutex.unlock();
                     wakeLoop(loop);
@@ -525,7 +584,6 @@ pub const App = struct {
             log.info("tool results appended, looping back", .{});
             self.mutex.lock();
             self.tool_status = null;
-            self.grep_status = .{};
             self.mutex.unlock();
         }
 
@@ -533,7 +591,8 @@ pub const App = struct {
         self.mutex.lock();
         self.setLoading(false);
         self.tool_status = null;
-        self.grep_status = .{};
+        self.clearGrepStatus();
+        self.clearGlobStatus();
         self.cancel_requested = false;
         self.needs_redraw = true;
         self.mutex.unlock();

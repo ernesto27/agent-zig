@@ -659,14 +659,20 @@ pub fn main() !void {
         // Input box with border
         // Preview panel
         const show_grep_panel = !app.tool_confirmation.pending and app.grep_status.pattern.len > 0;
+        const show_glob_panel = !app.tool_confirmation.pending and app.glob_status.pattern.len > 0;
 
-        if (app.tool_confirmation.pending or show_grep_panel) {
+        if (app.tool_confirmation.pending or show_grep_panel or show_glob_panel) {
             const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
             const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
+            const is_search_preview = if (app.tool_confirmation.pending)
+                std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob")
+            else
+                show_grep_panel or show_glob_panel;
             const is_grep = if (app.tool_confirmation.pending)
                 std.mem.eql(u8, app.tool_confirmation.tool_name, "grep")
             else
-                true;
+                show_grep_panel;
+            const preview_path = if (is_grep) app.grep_status.path else app.glob_status.path;
             const preview_win = win.child(.{
                 .x_off = 0,
                 .y_off = layout.preview_y,
@@ -676,8 +682,8 @@ pub fn main() !void {
             });
             var title_buf: [256]u8 = undefined;
             const title = std.fmt.bufPrint(&title_buf, " {s} {s} ", .{
-                if (is_bash) "Run:" else if (is_grep) "Grep Tool (params):" else if (is_write) "New file:" else "Editing:",
-                if (is_grep) app.grep_status.path else app.tool_confirmation.file_path,
+                if (is_bash) "Run:" else if (is_search_preview) (if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
+                if (is_search_preview) preview_path else app.tool_confirmation.file_path,
             }) catch " Preview ";
             _ = preview_win.printSegment(.{
                 .text = title,
@@ -687,26 +693,27 @@ pub fn main() !void {
             const sel_row = preview_win.height -| 3;
             const preview_content_end = sel_row;
 
-            if (is_grep) {
+            if (is_search_preview) {
                 var grep_bufs: [3][512]u8 = undefined;
                 var grep_row: u16 = 1;
-                if (app.grep_status.pattern.len > 0) {
-                    const grep_pattern = std.fmt.bufPrint(&grep_bufs[0], " pattern: {s}", .{app.grep_status.pattern}) catch " pattern: ";
+                const pattern = if (is_grep) app.grep_status.pattern else app.glob_status.pattern;
+                if (pattern.len > 0) {
+                    const grep_pattern = std.fmt.bufPrint(&grep_bufs[0], " pattern: {s}", .{pattern}) catch " pattern: ";
                     _ = preview_win.printSegment(.{
                         .text = grep_pattern,
                         .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
                     }, .{ .row_offset = grep_row, .col_offset = 1 });
                     grep_row += 1;
                 }
-                if (app.grep_status.path.len > 0) {
-                    const grep_path = std.fmt.bufPrint(&grep_bufs[1], " path: {s}", .{app.grep_status.path}) catch " path: .";
+                if (preview_path.len > 0) {
+                    const grep_path = std.fmt.bufPrint(&grep_bufs[1], " path: {s}", .{preview_path}) catch " path: .";
                     _ = preview_win.printSegment(.{
                         .text = grep_path,
                         .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xFF } } },
                     }, .{ .row_offset = grep_row, .col_offset = 1 });
                     grep_row += 1;
                 }
-                if (app.grep_status.include.len > 0) {
+                if (is_grep and app.grep_status.include.len > 0) {
                     const grep_include = std.fmt.bufPrint(&grep_bufs[2], " include: {s}", .{app.grep_status.include}) catch " include: ";
                     _ = preview_win.printSegment(.{
                         .text = grep_include,
@@ -716,7 +723,7 @@ pub fn main() !void {
                 }
 
                 _ = preview_win.printSegment(.{
-                    .text = " Searching with current grep parameters...",
+                    .text = if (is_grep) " Searching with current grep parameters..." else " Searching with current glob parameters...",
                     .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
                 }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
             } else if (is_bash) {

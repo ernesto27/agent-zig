@@ -66,7 +66,7 @@ src/
 ├── layout.zig            # TUI layout computation helpers
 ├── ui.zig                # Chat rendering, message display, spinner widget
 ├── markdown.zig          # Markdown → styled terminal lines renderer
-├── tools.zig             # Tool registry and executor (read_file, write_file, edit_file, bash)
+├── tools.zig             # Tool registry and executor (read_file, write_file, edit_file, bash, glob, grep)
 ├── system_prompt.zig     # System prompt construction
 ├── at_picker.zig         # @ file picker widget
 ├── command_picker.zig    # / slash command picker widget
@@ -85,7 +85,7 @@ src/
 - **LLM connectivity:** Streaming responses via SSE (Anthropic + OpenAI)
 - **Multi-provider support:** Anthropic (Claude Opus/Sonnet/Haiku) and OpenAI (GPT-4o, o3, o4-mini)
 - **Thinking support:** Extended thinking display for supported models
-- **Tool system:** `read_file`, `write_file`, `edit_file`, `bash` — with approve/deny/accept_all confirmation UI
+- **Tool system:** `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep` — with approve/deny/accept_all confirmation UI for mutating tools and preview panels for search tools
 - **Markdown rendering:** Styled output in the chat area
 - **Spinner:** Loading indicator during LLM generation
 - **Cancellation:** `Esc` cancels in-flight LLM requests
