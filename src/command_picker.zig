@@ -81,6 +81,17 @@ pub const CommandPicker = struct {
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
+        const panel_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
+
+        // Fill entire panel background
+        var row_idx: u16 = 0;
+        while (row_idx < picker_h) : (row_idx += 1) {
+            var col: u16 = 1;
+            while (col < screen_w -| 1) : (col += 1) {
+                picker.writeCell(col, row_idx, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = panel_bg } });
+            }
+        }
+
         for (self.results.items, 0..) |command, idx| {
             const row: u16 = @intCast(idx);
             if (row >= n) break;
@@ -89,19 +100,12 @@ pub const CommandPicker = struct {
             const bg: vaxis.Color = if (is_selected)
                 .{ .rgb = .{ 0xC0, 0x70, 0x20 } }
             else
-                .{ .index = 0 };
+                panel_bg;
             const style: vaxis.Style = if (is_selected)
                 .{ .bg = bg, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true }
             else
-                .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } };
+                .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } }, .bg = panel_bg };
             const prefix: []const u8 = if (is_selected) " > /" else "   /";
-
-            if (is_selected) {
-                var col: u16 = 1;
-                while (col < screen_w -| 1) : (col += 1) {
-                    picker.writeCell(col, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
-                }
-            }
 
             const res = picker.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = row, .col_offset = 0 });
             const name_res = picker.printSegment(.{ .text = command.name, .style = style }, .{ .row_offset = row, .col_offset = res.col });
@@ -110,7 +114,7 @@ pub const CommandPicker = struct {
                 .style = if (is_selected)
                     .{ .fg = .{ .rgb = .{ 0x2A, 0x15, 0x00 } }, .bg = bg }
                 else
-                    .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+                    .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bg = panel_bg },
             }, .{ .row_offset = row, .col_offset = name_res.col + 2 });
         }
     }
