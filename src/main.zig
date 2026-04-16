@@ -8,7 +8,7 @@ const chat_selection = @import("chat_selection.zig");
 const layout_mod = @import("layout.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
-const command_picker_mod = @import("command_picker.zig");
+const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 
@@ -27,6 +27,25 @@ pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize)
     std.process.exit(1);
 }
 
+fn spawnLlmRequest(
+    alloc: std.mem.Allocator,
+    app: *App,
+    loop: *EventLoop,
+    spinner_state: *ui.SpinnerState,
+    auto_scroll: *bool,
+) !void {
+    app.mutex.lock();
+    try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
+    app.setLoading(true);
+    app.mutex.unlock();
+    auto_scroll.* = true;
+    const generation = spinner_state.generation.fetchAdd(1, .acq_rel) + 1;
+    const spinner = try std.Thread.spawn(.{}, ui.spinnerThread, .{ app, loop, spinner_state, generation });
+    spinner.detach();
+    const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ app, loop });
+    thread.detach();
+}
+
 fn runSlashCommand(
     alloc: std.mem.Allocator,
     action: command_picker_mod.CommandAction,
@@ -35,7 +54,7 @@ fn runSlashCommand(
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
     app: *App,
-) !void {
+) !bool {
     input.clearRetainingCapacity();
     cursor_pos.* = 0;
 
@@ -44,7 +63,13 @@ fn runSlashCommand(
         .model => try model_picker.open(alloc),
         .clear => app.clearHistory(),
         .resume_session => app.sessions.open(),
+        .init => {
+            if (app.is_loading) return false;
+            try app.initCMD();
+            return true;
+        },
     }
+    return false;
 }
 
 fn handleEscape(
@@ -316,10 +341,14 @@ pub fn main() !void {
                     if (app.tool_confirmation.pending) {
                         try app.resolveToolConfirmation(alloc, app.tool_confirmation.cursor);
                     } else if (command_picker.active) {
+                        var should_send = false;
                         if (command_picker.selectedCommand()) |command| {
-                            try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker, &app);
+                            should_send = try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker, &app);
                         }
                         command_picker.reset(alloc);
+                        if (should_send and !app.is_loading) {
+                            try spawnLlmRequest(alloc, &app, &loop, &spinner_state, &auto_scroll);
+                        }
                     } else if (at_picker.active and at_picker.results.items.len > 0) {
                         // Confirm file selection — do NOT submit message
                         const picked_path = at_picker.results.items[at_picker.selected];
@@ -393,24 +422,15 @@ pub fn main() !void {
 
                         const user_text = try alloc.dupe(u8, input.items);
                         try app.messages.append(alloc, .{ .role = .user, .content = user_text });
-                        try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
-                        app.setLoading(true);
                         app.mutex.unlock();
 
                         try history.append(alloc, try alloc.dupe(u8, input.items));
                         history_idx = null;
                         draft.clearRetainingCapacity();
                         input.clearRetainingCapacity();
-                        auto_scroll = true;
                         cursor_pos = 0;
 
-                        const generation = spinner_state.generation.fetchAdd(1, .acq_rel) + 1;
-                        const spinner = try std.Thread.spawn(.{}, ui.spinnerThread, .{ &app, &loop, &spinner_state, generation });
-                        spinner.detach();
-
-                        // Spawn background thread
-                        const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ &app, &loop });
-                        thread.detach();
+                        try spawnLlmRequest(alloc, &app, &loop, &spinner_state, &auto_scroll);
                     }
                 }
                 app.needs_redraw = true;

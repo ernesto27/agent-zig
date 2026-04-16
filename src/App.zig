@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const context_usage_mod = @import("context_usage.zig");
 const sessions = @import("sessions.zig");
+const init_mod = @import("commands/init.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -45,6 +46,7 @@ pub const App = struct {
     pending_attachments: std.ArrayList([]u8),
     system_prompt: agent.system_prompt.SystemPrompt = .{},
     sessions: sessions.Sessions = .{},
+    init_cmd: init_mod.Init = .{},
     mutex: std.Thread.Mutex = .{},
     is_loading: bool = false,
     start_time: ?i64 = null,
@@ -111,6 +113,12 @@ pub const App = struct {
         self.freeMessages();
         self.messages.clearRetainingCapacity();
         self.llm_history.clearRetainingCapacity();
+    }
+
+    pub fn initCMD(self: *Self) !void {
+        const prompt = init_mod.Init.getInitPrompt();
+        const content = try self.alloc.dupe(u8, prompt);
+        try self.messages.append(self.alloc, .{ .role = .user, .content = content });
     }
 
     pub fn deinit(self: *Self) void {
@@ -517,6 +525,7 @@ pub const App = struct {
             log.info("tool results appended, looping back", .{});
             self.mutex.lock();
             self.tool_status = null;
+            self.grep_status = .{};
             self.mutex.unlock();
         }
 

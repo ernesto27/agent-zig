@@ -3,7 +3,7 @@ const vaxis = @import("vaxis");
 
 pub const MAX_RESULTS = 10;
 
-pub const CommandAction = enum { provider, model, clear, resume_session };
+pub const CommandAction = enum { provider, model, clear, resume_session, init };
 
 pub const Command = struct {
     name: []const u8,
@@ -16,6 +16,7 @@ pub const commands = [_]Command{
     .{ .name = "model", .description = "Choose active model", .action = .model },
     .{ .name = "clear", .description = "Clear conversation", .action = .clear },
     .{ .name = "resume", .description = "Resume conversation", .action = .resume_session },
+    .{ .name = "init", .description = "Create or update AGENTS.md", .action = .init },
 };
 
 pub const CommandPicker = struct {
