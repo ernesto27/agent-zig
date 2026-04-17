@@ -16,6 +16,7 @@ pub const Message = struct {
     thinking: ?[]const u8 = null,
     styled_lines: ?[]const agent.markdown.StyledLine = null,
     styled_content_len: usize = 0,
+    is_error: bool = false,
 };
 
 pub const ToolConfirmation = struct {
@@ -187,7 +188,15 @@ pub const App = struct {
             return msg.styled_lines.?;
         }
         if (msg.styled_lines) |old| agent.markdown.freeLines(self.alloc, old);
-        msg.styled_lines = try agent.markdown.parse(self.alloc, msg.content);
+        const lines = try agent.markdown.parse(self.alloc, msg.content);
+        if (msg.is_error) {
+            for (lines) |line| {
+                for (line.spans) |*span| {
+                    span.style.fg = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };
+                }
+            }
+        }
+        msg.styled_lines = lines;
         msg.styled_content_len = msg.content.len;
         return msg.styled_lines.?;
     }
@@ -396,9 +405,9 @@ pub const App = struct {
                 if (self.messages.items.len > 0) {
                     const last = &self.messages.items[self.messages.items.len - 1];
                     alloc.free(last.content);
-                    var buf: [128]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "(error: {})", .{err}) catch "(error)";
+                    const msg = "Service is not working, try later";
                     last.content = alloc.dupe(u8, msg) catch "";
+                    last.is_error = true;
                 }
                 self.mutex.unlock();
                 break;

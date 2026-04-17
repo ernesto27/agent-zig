@@ -38,7 +38,7 @@ pub const StyledSpan = struct {
 };
 
 pub const StyledLine = struct {
-    spans: []const StyledSpan,
+    spans: []StyledSpan,
     indent: u16,
     block_bg: ?Color,
 };
