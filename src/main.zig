@@ -661,29 +661,7 @@ pub fn main() !void {
 
         // @picker overlay — rendered above the input box
         if (at_picker.active and at_picker.results.items.len > 0) {
-            const n: u16 = @intCast(@min(at_picker.results.items.len, at_picker_mod.MAX_RESULTS));
-            const picker_h: u16 = n + 2; // +2 for border
-            const picker_y: u16 = if (layout.input_y >= picker_h) layout.input_y - picker_h else 0;
-            const picker_win = win.child(.{
-                .x_off = 0,
-                .y_off = picker_y,
-                .width = vx.screen.width,
-                .height = picker_h,
-                .border = .{ .where = .all, .glyphs = .single_rounded },
-            });
-
-            for (at_picker.results.items, 0..) |path, idx| {
-                const picker_row: u16 = @intCast(idx);
-                if (picker_row >= n) break;
-                const is_selected = idx == at_picker.selected;
-                const style: vaxis.Style = if (is_selected)
-                    .{ .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true }
-                else
-                    .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } };
-                const prefix: []const u8 = if (is_selected) " > " else "   ";
-                const res = picker_win.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = picker_row, .col_offset = 0 });
-                _ = picker_win.printSegment(.{ .text = path, .style = style }, .{ .row_offset = picker_row, .col_offset = res.col });
-            }
+            at_picker.renderFileSelection(win, vx.screen.width, layout.input_y);
         }
 
         if (command_picker.active and command_picker.results.items.len > 0) {

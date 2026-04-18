@@ -7,3 +7,4 @@ agent.log
 mock-server/node_modules
 test
 dist/*
+zig-pkg

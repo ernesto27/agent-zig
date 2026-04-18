@@ -7,9 +7,15 @@
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder
 [x] - refactor render 
+[] - when sho preview file,  put scroll at top
+[] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
 [] - fix model descriptcion space ,  
 [] - do not show this err.httprequestfailes, show a nice error message
+[] - when do some change or edit, explain what is doing
 [x] - command show,  is overlap with content text
+[] - save in config.json thinking choosen
+[] - when paste message large ,  format
+[] - when update files only show diff changes, not all file
 [] - init command
 [] - paset larget text crash
 [] - drag stop working

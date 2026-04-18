@@ -1,4 +1,5 @@
 const std = @import("std");
+const vaxis = @import("vaxis");
 
 pub const MAX_RESULTS = 10;
 pub const MAX_PATH_LEN = 512;
@@ -121,6 +122,42 @@ pub const AtPicker = struct {
                 },
                 else => alloc.free(full_path),
             }
+        }
+    }
+
+    pub fn renderFileSelection(self: *const AtPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
+        const n: u16 = @intCast(@min(self.results.items.len, MAX_RESULTS));
+        const picker_h: u16 = n + 2; // +2 for border
+        const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;
+        const picker = win.child(.{
+            .x_off = 0,
+            .y_off = picker_y,
+            .width = screen_w,
+            .height = picker_h,
+            .border = .{ .where = .all, .glyphs = .single_rounded },
+        });
+
+        const panel_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
+
+        var row_idx: u16 = 0;
+        while (row_idx < picker_h) : (row_idx += 1) {
+            var col: u16 = 1;
+            while (col < screen_w -| 1) : (col += 1) {
+                picker.writeCell(col, row_idx, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = panel_bg } });
+            }
+        }
+
+        for (self.results.items, 0..) |path, idx| {
+            const row: u16 = @intCast(idx);
+            if (row >= n) break;
+            const is_selected = idx == self.selected;
+            const style: vaxis.Style = if (is_selected)
+                .{ .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true }
+            else
+                .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } }, .bg = panel_bg };
+            const prefix: []const u8 = if (is_selected) " > " else "   ";
+            const res = picker.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = row, .col_offset = 0 });
+            _ = picker.printSegment(.{ .text = path, .style = style }, .{ .row_offset = row, .col_offset = res.col });
         }
     }
 };
