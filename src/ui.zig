@@ -93,20 +93,25 @@ pub fn spinnerThread(app: *App, loop: *EventLoop, spinner_state: *SpinnerState, 
 pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, preview_y: u16, preview_h: u16, app: *const App, preview_scroll: usize) void {
     const show_grep_panel = !app.tool_confirmation.pending and app.grep_status.pattern.len > 0;
     const show_glob_panel = !app.tool_confirmation.pending and app.glob_status.pattern.len > 0;
+    const show_web_panel = !app.tool_confirmation.pending and app.web_status.label.len > 0;
 
-    if (!(app.tool_confirmation.pending or show_grep_panel or show_glob_panel)) return;
+    if (!(app.tool_confirmation.pending or show_grep_panel or show_glob_panel or show_web_panel)) return;
 
     const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
     const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
-    const is_search_preview = if (app.tool_confirmation.pending)
-        std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob")
+    const is_web_preview = if (app.tool_confirmation.pending)
+        std.mem.eql(u8, app.tool_confirmation.tool_name, "web_search") or std.mem.eql(u8, app.tool_confirmation.tool_name, "web_extract")
     else
-        show_grep_panel or show_glob_panel;
+        show_web_panel;
+    const is_search_preview = if (app.tool_confirmation.pending)
+        std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob") or is_web_preview
+    else
+        show_grep_panel or show_glob_panel or show_web_panel;
     const is_grep = if (app.tool_confirmation.pending)
         std.mem.eql(u8, app.tool_confirmation.tool_name, "grep")
     else
         show_grep_panel;
-    const preview_path = if (is_grep) app.grep_status.path else app.glob_status.path;
+    const preview_path = if (is_web_preview) app.web_status.label else if (is_grep) app.grep_status.path else app.glob_status.path;
 
     const preview_win = win.child(.{
         .x_off = 0,
@@ -117,7 +122,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
     });
 
     const title = std.fmt.allocPrint(alloc, " {s} {s} ", .{
-        if (is_bash) "Run:" else if (is_search_preview) (if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
+        if (is_bash) "Run:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
         if (is_search_preview) preview_path else app.tool_confirmation.file_path,
     }) catch " Preview ";
     _ = preview_win.printSegment(.{
@@ -129,37 +134,39 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
     const preview_content_end = sel_row;
 
     if (is_search_preview) {
-        var grep_row: u16 = 1;
-        const pattern = if (is_grep) app.grep_status.pattern else app.glob_status.pattern;
-        if (pattern.len > 0) {
-            const grep_pattern = std.fmt.allocPrint(alloc, " pattern: {s}", .{pattern}) catch " pattern: ";
-            _ = preview_win.printSegment(.{
-                .text = grep_pattern,
-                .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
-            }, .{ .row_offset = grep_row, .col_offset = 1 });
-            grep_row += 1;
-        }
-        if (preview_path.len > 0) {
-            const grep_path = std.fmt.allocPrint(alloc, " path: {s}", .{preview_path}) catch " path: .";
-            _ = preview_win.printSegment(.{
-                .text = grep_path,
-                .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xFF } } },
-            }, .{ .row_offset = grep_row, .col_offset = 1 });
-            grep_row += 1;
-        }
-        if (is_grep and app.grep_status.include.len > 0) {
-            const grep_include = std.fmt.allocPrint(alloc, " include: {s}", .{app.grep_status.include}) catch " include: ";
-            _ = preview_win.printSegment(.{
-                .text = grep_include,
-                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xE0, 0xA0 } } },
-            }, .{ .row_offset = grep_row, .col_offset = 1 });
-            grep_row += 1;
-        }
+        if (is_web_preview) {} else {
+            var grep_row: u16 = 1;
+            const pattern = if (is_grep) app.grep_status.pattern else app.glob_status.pattern;
+            if (pattern.len > 0) {
+                const grep_pattern = std.fmt.allocPrint(alloc, " pattern: {s}", .{pattern}) catch " pattern: ";
+                _ = preview_win.printSegment(.{
+                    .text = grep_pattern,
+                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
+                }, .{ .row_offset = grep_row, .col_offset = 1 });
+                grep_row += 1;
+            }
+            if (preview_path.len > 0) {
+                const grep_path = std.fmt.allocPrint(alloc, " path: {s}", .{preview_path}) catch " path: .";
+                _ = preview_win.printSegment(.{
+                    .text = grep_path,
+                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xFF } } },
+                }, .{ .row_offset = grep_row, .col_offset = 1 });
+                grep_row += 1;
+            }
+            if (is_grep and app.grep_status.include.len > 0) {
+                const grep_include = std.fmt.allocPrint(alloc, " include: {s}", .{app.grep_status.include}) catch " include: ";
+                _ = preview_win.printSegment(.{
+                    .text = grep_include,
+                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xE0, 0xA0 } } },
+                }, .{ .row_offset = grep_row, .col_offset = 1 });
+                grep_row += 1;
+            }
 
-        _ = preview_win.printSegment(.{
-            .text = if (is_grep) " Searching with current grep parameters..." else " Searching with current glob parameters...",
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
-        }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
+            _ = preview_win.printSegment(.{
+                .text = if (is_grep) " Searching with current grep parameters..." else " Searching with current glob parameters...",
+                .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
+        }
     } else if (is_bash) {
         _ = preview_win.printSegment(.{
             .text = " Do you want to proceed?",

@@ -54,6 +54,15 @@ pub const GlobStatus = struct {
     }
 };
 
+pub const WebStatus = struct {
+    label: []const u8 = "",
+
+    pub fn deinit(self: *WebStatus, alloc: std.mem.Allocator) void {
+        if (self.label.len > 0) alloc.free(self.label);
+        self.* = .{};
+    }
+};
+
 pub const ConfirmationAction = enum { approve, deny, accept_all };
 pub const App = struct {
     tool_confirmation: ToolConfirmation = .{},
@@ -73,6 +82,7 @@ pub const App = struct {
     tool_status: ?[]const u8 = null,
     grep_status: GrepStatus = .{},
     glob_status: GlobStatus = .{},
+    web_status: WebStatus = .{},
     cancel_requested: bool = false,
     context_usage: context_usage_mod.contextUsage = .{},
 
@@ -148,6 +158,7 @@ pub const App = struct {
         self.clearPendingAttachments();
         self.grep_status.deinit(self.alloc);
         self.glob_status.deinit(self.alloc);
+        self.web_status.deinit(self.alloc);
         self.pending_attachments.deinit(self.alloc);
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
@@ -176,6 +187,30 @@ pub const App = struct {
 
     fn clearGlobStatus(self: *Self) void {
         self.glob_status.deinit(self.alloc);
+    }
+
+    fn setWebStatus(self: *Self, label: []const u8) void {
+        self.web_status.deinit(self.alloc);
+        self.web_status = .{
+            .label = if (label.len == 0) "" else (self.alloc.dupe(u8, label) catch ""),
+        };
+    }
+
+    fn clearWebStatus(self: *Self) void {
+        self.web_status.deinit(self.alloc);
+    }
+
+    fn summarizeUrls(self: *Self, value: std.json.Value) []const u8 {
+        return switch (value) {
+            .string => self.alloc.dupe(u8, value.string) catch "",
+            .array => |arr| blk: {
+                if (arr.items.len == 0) break :blk self.alloc.dupe(u8, "") catch "";
+                if (arr.items[0] != .string) break :blk self.alloc.dupe(u8, "<invalid urls>") catch "";
+                if (arr.items.len == 1) break :blk self.alloc.dupe(u8, arr.items[0].string) catch "";
+                break :blk std.fmt.allocPrint(self.alloc, "{s} (+{d} more)", .{ arr.items[0].string, arr.items.len - 1 }) catch "";
+            },
+            else => self.alloc.dupe(u8, "<invalid urls>") catch "",
+        };
     }
 
     fn clearPendingAttachments(self: *Self) void {
@@ -396,6 +431,7 @@ pub const App = struct {
                     self.tool_status = null;
                     self.clearGrepStatus();
                     self.clearGlobStatus();
+                    self.clearWebStatus();
                     self.cancel_requested = false;
                     self.needs_redraw = true;
                     self.mutex.unlock();
@@ -524,6 +560,7 @@ pub const App = struct {
                         self.tool_confirmation.old_string = old_s;
                         self.tool_confirmation.new_string = new_s;
                         self.tool_confirmation.cursor = .approve;
+                        self.preview_scroll = 0;
                         self.tool_status = tool_use.name;
                         self.needs_redraw = true;
                         self.mutex.unlock();
@@ -573,6 +610,31 @@ pub const App = struct {
                     wakeLoop(loop);
                 }
 
+                if (std.mem.eql(u8, tool_use.name, "web_search")) {
+                    const query = agent.tools.getStringField(tool_use.input, "query") orelse "";
+                    const label = std.fmt.allocPrint(self.alloc, "Web Search(\"{s}\")", .{query}) catch "Web Search()";
+                    self.mutex.lock();
+                    self.tool_status = tool_use.name;
+                    self.setWebStatus(label);
+                    self.needs_redraw = true;
+                    self.mutex.unlock();
+                    self.alloc.free(label);
+                    wakeLoop(loop);
+                }
+
+                if (std.mem.eql(u8, tool_use.name, "web_extract")) {
+                    const target = self.summarizeUrls(agent.tools.getField(tool_use.input, "urls") orelse .null);
+                    const label = std.fmt.allocPrint(self.alloc, "Web Extract(\"{s}\")", .{target}) catch "Web Extract()";
+                    self.mutex.lock();
+                    self.tool_status = tool_use.name;
+                    self.setWebStatus(label);
+                    self.needs_redraw = true;
+                    self.mutex.unlock();
+                    self.alloc.free(target);
+                    self.alloc.free(label);
+                    wakeLoop(loop);
+                }
+
                 const result = agent.tools.execute(alloc, tool_use.name, tool_use.input);
                 log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
                 tool_results[i] = .{
@@ -602,6 +664,7 @@ pub const App = struct {
         self.tool_status = null;
         self.clearGrepStatus();
         self.clearGlobStatus();
+        self.clearWebStatus();
         self.cancel_requested = false;
         self.needs_redraw = true;
         self.mutex.unlock();

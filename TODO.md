@@ -2,16 +2,20 @@
 [x] - basic read tool file/
 [x] - show thinking
 [x] - show code before accept- deny
-[] - tool for search internet
+[x] - tool for search internet
+[] - make tool calls in parallet internet
 [] - show read file using
+[] - show seconds, mins, in feedback, now only show seconds
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder
 [x] - refactor render 
-[] - when sho preview file,  put scroll at top
+[x] - when sho preview file,  put scroll at top
+[] - when save session,  also save tool response and action
 [] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
 [] - fix model descriptcion space ,  
 [] - do not show this err.httprequestfailes, show a nice error message
-[] - when do some change or edit, explain what is doing
+[] - when do some change or edit, explain what ihi
+hs doing
 [x] - command show,  is overlap with content text
 [] - save in config.json thinking choosen
 [] - when paste message large ,  format
@@ -98,6 +102,7 @@ If `AGENTS.md` already exists at `/home/eponce/code/agent-zig`, improve it in pl
 
   [ ] Agentic loop
       - Allow LLM to chain multiple tool calls
+- 
       - Max iterations limit (default: 25 steps)
       - Automatic error detection and retry logic
       - Stop conditions: task complete, max steps, user interrupt

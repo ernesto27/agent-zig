@@ -2,6 +2,7 @@
 const std = @import("std");
 
 pub const llm = @import("llm.zig");
+pub const build = @import("build_info.zig");
 pub const config = @import("config.zig");
 pub const markdown = @import("markdown.zig");
 pub const tools = @import("tools.zig");

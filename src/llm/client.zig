@@ -1,6 +1,7 @@
 const std = @import("std");
 const message = @import("message.zig");
 const providers = @import("providers.zig");
+const json_helpers = @import("../json_helpers.zig");
 
 const log = std.log.scoped(.llm);
 
@@ -461,32 +462,32 @@ fn handleSseEvent(
     const root = parsed.value;
 
     if (std.mem.eql(u8, event_name, "message_start")) {
-        const msg_obj = getObjectField(root, "message") orelse return;
-        if (getStringField(msg_obj, "id")) |id| try stream.setOwnedString(&stream.id, id);
-        if (getStringField(msg_obj, "role")) |role| try stream.setOwnedString(&stream.role, role);
-        if (getStringField(msg_obj, "model")) |model| try stream.setOwnedString(&stream.model, model);
-        if (getObjectField(msg_obj, "usage")) |usage_obj| {
-            if (getU64Field(usage_obj, "input_tokens")) |input_tokens| stream.input_tokens = input_tokens;
-            if (getU64Field(usage_obj, "output_tokens")) |output_tokens| stream.output_tokens = output_tokens;
+        const msg_obj = json_helpers.getObjectField(root, "message") orelse return;
+        if (json_helpers.getStringField(msg_obj, "id")) |id| try stream.setOwnedString(&stream.id, id);
+        if (json_helpers.getStringField(msg_obj, "role")) |role| try stream.setOwnedString(&stream.role, role);
+        if (json_helpers.getStringField(msg_obj, "model")) |model| try stream.setOwnedString(&stream.model, model);
+        if (json_helpers.getObjectField(msg_obj, "usage")) |usage_obj| {
+            if (json_helpers.getU64Field(usage_obj, "input_tokens")) |input_tokens| stream.input_tokens = input_tokens;
+            if (json_helpers.getU64Field(usage_obj, "output_tokens")) |output_tokens| stream.output_tokens = output_tokens;
         }
         return;
     }
 
     if (std.mem.eql(u8, event_name, "content_block_start")) {
-        const index = getU64Field(root, "index") orelse return;
-        const block_obj = getObjectField(root, "content_block") orelse return;
-        const block_type = getStringField(block_obj, "type") orelse return;
+        const index = json_helpers.getU64Field(root, "index") orelse return;
+        const block_obj = json_helpers.getObjectField(root, "content_block") orelse return;
+        const block_type = json_helpers.getStringField(block_obj, "type") orelse return;
         const block_kind: StreamBlockType = if (std.mem.eql(u8, block_type, "tool_use")) .tool_use else if (std.mem.eql(u8, block_type, "thinking")) .thinking else .text;
         const block = try stream.initBlockAt(index, block_kind);
 
         if (block_kind == .text) {
-            if (getStringField(block_obj, "text")) |text| try block.text.appendSlice(allocator, text);
+            if (json_helpers.getStringField(block_obj, "text")) |text| try block.text.appendSlice(allocator, text);
             return;
         }
 
-        if (getStringField(block_obj, "id")) |id| block.id = try allocator.dupe(u8, id);
-        if (getStringField(block_obj, "name")) |name| block.name = try allocator.dupe(u8, name);
-        if (getField(block_obj, "input")) |input_val| {
+        if (json_helpers.getStringField(block_obj, "id")) |id| block.id = try allocator.dupe(u8, id);
+        if (json_helpers.getStringField(block_obj, "name")) |name| block.name = try allocator.dupe(u8, name);
+        if (json_helpers.getField(block_obj, "input")) |input_val| {
             const input_json = try std.json.Stringify.valueAlloc(arena.allocator(), input_val, .{});
             if (!std.mem.eql(u8, input_json, "null") and !std.mem.eql(u8, input_json, "{}")) {
                 try block.input_json.appendSlice(allocator, input_json);
@@ -496,33 +497,33 @@ fn handleSseEvent(
     }
 
     if (std.mem.eql(u8, event_name, "content_block_delta")) {
-        const index = getU64Field(root, "index") orelse return;
-        const delta_obj = getObjectField(root, "delta") orelse return;
-        const delta_type = getStringField(delta_obj, "type") orelse return;
+        const index = json_helpers.getU64Field(root, "index") orelse return;
+        const delta_obj = json_helpers.getObjectField(root, "delta") orelse return;
+        const delta_type = json_helpers.getStringField(delta_obj, "type") orelse return;
         const block = stream.getBlock(index) orelse return;
 
         if (std.mem.eql(u8, delta_type, "text_delta")) {
-            const text = getStringField(delta_obj, "text") orelse return;
+            const text = json_helpers.getStringField(delta_obj, "text") orelse return;
             try block.text.appendSlice(allocator, text);
             if (text.len > 0) on_chunk(ctx, text);
             return;
         }
 
         if (std.mem.eql(u8, delta_type, "thinking_delta")) {
-            const text = getStringField(delta_obj, "thinking") orelse return;
+            const text = json_helpers.getStringField(delta_obj, "thinking") orelse return;
             try block.text.appendSlice(allocator, text);
             if (text.len > 0) on_thinking_chunk(ctx, text);
             return;
         }
 
         if (std.mem.eql(u8, delta_type, "signature_delta")) {
-            const sig = getStringField(delta_obj, "signature") orelse return;
+            const sig = json_helpers.getStringField(delta_obj, "signature") orelse return;
             try block.signature.appendSlice(allocator, sig);
             return;
         }
 
         if (std.mem.eql(u8, delta_type, "input_json_delta")) {
-            const partial_json = getStringField(delta_obj, "partial_json") orelse getStringField(delta_obj, "text") orelse return;
+            const partial_json = json_helpers.getStringField(delta_obj, "partial_json") orelse json_helpers.getStringField(delta_obj, "text") orelse return;
             try block.input_json.appendSlice(allocator, partial_json);
             return;
         }
@@ -531,49 +532,22 @@ fn handleSseEvent(
     }
 
     if (std.mem.eql(u8, event_name, "message_delta")) {
-        if (getObjectField(root, "delta")) |delta_obj| {
-            if (getStringField(delta_obj, "stop_reason")) |stop_reason| try stream.setOwnedString(&stream.stop_reason, stop_reason);
-            if (getStringField(delta_obj, "stop_sequence")) |stop_sequence| try stream.setOwnedString(&stream.stop_sequence, stop_sequence);
+        if (json_helpers.getObjectField(root, "delta")) |delta_obj| {
+            if (json_helpers.getStringField(delta_obj, "stop_reason")) |stop_reason| try stream.setOwnedString(&stream.stop_reason, stop_reason);
+            if (json_helpers.getStringField(delta_obj, "stop_sequence")) |stop_sequence| try stream.setOwnedString(&stream.stop_sequence, stop_sequence);
         }
-        if (getObjectField(root, "usage")) |usage_obj| {
-            if (getU64Field(usage_obj, "output_tokens")) |output_tokens| stream.output_tokens = output_tokens;
+        if (json_helpers.getObjectField(root, "usage")) |usage_obj| {
+            if (json_helpers.getU64Field(usage_obj, "output_tokens")) |output_tokens| stream.output_tokens = output_tokens;
         }
         return;
     }
 
     if (std.mem.eql(u8, event_name, "error")) {
-        if (getObjectField(root, "error")) |err_obj| {
-            if (getStringField(err_obj, "message")) |msg| log.err("stream error: {s}", .{msg});
+        if (json_helpers.getObjectField(root, "error")) |err_obj| {
+            if (json_helpers.getStringField(err_obj, "message")) |msg| log.err("stream error: {s}", .{msg});
         }
         return error.HttpRequestFailed;
     }
-}
-
-fn getField(value: std.json.Value, field: []const u8) ?std.json.Value {
-    if (value != .object) return null;
-    return value.object.get(field);
-}
-
-fn getObjectField(value: std.json.Value, field: []const u8) ?std.json.Value {
-    const child = getField(value, field) orelse return null;
-    if (child != .object) return null;
-    return child;
-}
-
-fn getStringField(value: std.json.Value, field: []const u8) ?[]const u8 {
-    const child = getField(value, field) orelse return null;
-    if (child != .string) return null;
-    return child.string;
-}
-
-fn getU64Field(value: std.json.Value, field: []const u8) ?u64 {
-    const child = getField(value, field) orelse return null;
-    return switch (child) {
-        .integer => |num| if (num >= 0) @intCast(num) else null,
-        .float => |num| if (num >= 0) @intFromFloat(num) else null,
-        .number_string => |num| std.fmt.parseUnsigned(u64, num, 10) catch null,
-        else => null,
-    };
 }
 
 fn buildStreamedResponseJson(allocator: std.mem.Allocator, stream: *const StreamAccumulator) ![]u8 {
@@ -786,33 +760,33 @@ fn parseOpenAISseStream(
 
         // Capture top-level id from first chunk
         if (stream.id.items.len == 0) {
-            if (getStringField(root, "id")) |id| {
+            if (json_helpers.getStringField(root, "id")) |id| {
                 try stream.id.appendSlice(allocator, id);
             }
         }
 
         // Token usage (present on last chunk for some models)
-        if (getObjectField(root, "usage")) |usage_obj| {
-            if (getU64Field(usage_obj, "prompt_tokens")) |v| stream.input_tokens = v;
-            if (getU64Field(usage_obj, "completion_tokens")) |v| stream.output_tokens = v;
+        if (json_helpers.getObjectField(root, "usage")) |usage_obj| {
+            if (json_helpers.getU64Field(usage_obj, "prompt_tokens")) |v| stream.input_tokens = v;
+            if (json_helpers.getU64Field(usage_obj, "completion_tokens")) |v| stream.output_tokens = v;
         }
 
-        const choices = getField(root, "choices") orelse continue;
+        const choices = json_helpers.getField(root, "choices") orelse continue;
         if (choices != .array or choices.array.items.len == 0) continue;
         const choice = choices.array.items[0];
 
         // finish_reason
-        if (getStringField(choice, "finish_reason")) |fr| {
+        if (json_helpers.getStringField(choice, "finish_reason")) |fr| {
             if (!std.mem.eql(u8, fr, "null") and fr.len > 0) {
                 stream.stop_reason.clearRetainingCapacity();
                 try stream.stop_reason.appendSlice(allocator, fr);
             }
         }
 
-        const delta = getObjectField(choice, "delta") orelse continue;
+        const delta = json_helpers.getObjectField(choice, "delta") orelse continue;
 
         // Text content
-        if (getStringField(delta, "content")) |text| {
+        if (json_helpers.getStringField(delta, "content")) |text| {
             if (text.len > 0) {
                 try stream.text.appendSlice(allocator, text);
                 on_chunk(ctx, text);
@@ -820,21 +794,21 @@ fn parseOpenAISseStream(
         }
 
         // Tool calls
-        if (getField(delta, "tool_calls")) |tc_val| {
+        if (json_helpers.getField(delta, "tool_calls")) |tc_val| {
             if (tc_val != .array) continue;
             for (tc_val.array.items) |tc_item| {
-                const idx_val = getU64Field(tc_item, "index") orelse 0;
+                const idx_val = json_helpers.getU64Field(tc_item, "index") orelse 0;
                 const idx: usize = @intCast(idx_val);
                 const tc = try stream.getOrCreateToolCall(idx);
 
-                if (getStringField(tc_item, "id")) |id| {
+                if (json_helpers.getStringField(tc_item, "id")) |id| {
                     try tc.id.appendSlice(allocator, id);
                 }
-                if (getObjectField(tc_item, "function")) |fn_obj| {
-                    if (getStringField(fn_obj, "name")) |name| {
+                if (json_helpers.getObjectField(tc_item, "function")) |fn_obj| {
+                    if (json_helpers.getStringField(fn_obj, "name")) |name| {
                         try tc.name.appendSlice(allocator, name);
                     }
-                    if (getStringField(fn_obj, "arguments")) |args| {
+                    if (json_helpers.getStringField(fn_obj, "arguments")) |args| {
                         try tc.arguments.appendSlice(allocator, args);
                     }
                 }

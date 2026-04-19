@@ -125,7 +125,7 @@ pub const AtPicker = struct {
         }
     }
 
-    pub fn renderFileSelection(self: *const AtPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
+    pub fn render(self: *const AtPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
         const n: u16 = @intCast(@min(self.results.items.len, MAX_RESULTS));
         const picker_h: u16 = n + 2; // +2 for border
         const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;

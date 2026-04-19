@@ -1,5 +1,7 @@
 const std = @import("std");
+const json_helpers = @import("json_helpers.zig");
 const message = @import("llm/message.zig");
+const web = @import("tools/web.zig");
 
 const log = std.log.scoped(.tools);
 
@@ -9,10 +11,11 @@ pub const ToolResult = struct {
 };
 
 pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
-    if (input != .object) return null;
-    const val = input.object.get(field) orelse return null;
-    if (val != .string) return null;
-    return val.string;
+    return json_helpers.getStringField(input, field);
+}
+
+pub fn getField(input: std.json.Value, field: []const u8) ?std.json.Value {
+    return json_helpers.getField(input, field);
 }
 
 const read_file_schema_json =
@@ -117,6 +120,47 @@ const grep_schema_json =
     \\}
 ;
 
+const web_search_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "query": {
+    \\      "type": "string",
+    \\      "description": "Web search query"
+    \\    },
+    \\    "max_results": {
+    \\      "type": "integer",
+    \\      "description": "Maximum number of results to return"
+    \\    },
+    \\    "topic": {
+    \\      "type": "string",
+    \\      "description": "Search topic, such as general or news"
+    \\    }
+    \\  },
+    \\  "required": ["query"]
+    \\}
+;
+
+const web_extract_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "urls": {
+    \\      "description": "Single URL or array of URLs to extract"
+    \\    },
+    \\    "format": {
+    \\      "type": "string",
+    \\      "description": "Output format, such as markdown or text"
+    \\    },
+    \\    "extract_depth": {
+    \\      "type": "string",
+    \\      "description": "Extraction depth, basic or advanced"
+    \\    }
+    \\  },
+    \\  "required": ["urls"]
+    \\}
+;
+
 const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
@@ -161,6 +205,18 @@ const tool_specs = [_]ToolSpec{
         .schema_json = grep_schema_json,
         .required = &.{"pattern"},
     },
+    .{
+        .name = "web_search",
+        .description = "Search the web and return relevant results with title, URL, and extracted snippets.",
+        .schema_json = web_search_schema_json,
+        .required = &.{"query"},
+    },
+    .{
+        .name = "web_extract",
+        .description = "Extract page content from one or more URLs and return the cleaned content.",
+        .schema_json = web_extract_schema_json,
+        .required = &.{"urls"},
+    },
 };
 
 pub fn getDefinitions(allocator: std.mem.Allocator) ![]const message.ToolDefinition {
@@ -199,6 +255,14 @@ pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.j
     }
     if (std.mem.eql(u8, tool_name, "grep")) {
         return runGrep(allocator, input);
+    }
+    if (std.mem.eql(u8, tool_name, "web_search")) {
+        const result = web.search(allocator, input);
+        return .{ .content = result.content, .is_error = result.is_error };
+    }
+    if (std.mem.eql(u8, tool_name, "web_extract")) {
+        const result = web.extract(allocator, input);
+        return .{ .content = result.content, .is_error = result.is_error };
     }
 
     return .{

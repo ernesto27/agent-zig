@@ -1,7 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
-const build_options = @import("build_options");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const chat_selection = @import("chat_selection.zig");
@@ -16,7 +15,7 @@ const log_mod = @import("log.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
-const app_version = build_options.version;
+const app_version = agent.build.version;
 
 pub const std_options: std.Options = .{
     .logFn = log_mod.Logger.logToFile,
@@ -169,7 +168,6 @@ pub fn main() !void {
     var running = true;
     var scroll_offset: usize = 0;
     var auto_scroll = true;
-    var preview_scroll: usize = 0;
     var input = std.ArrayList(u8){};
     defer input.deinit(alloc);
     var cursor_pos: usize = 0;
@@ -450,7 +448,7 @@ pub fn main() !void {
             .mouse => |mouse| {
                 if (mouse.button == .wheel_up) {
                     if (app.tool_confirmation.pending) {
-                        if (preview_scroll > 0) preview_scroll -|= 3;
+                        if (app.preview_scroll > 0) app.preview_scroll -|= 3;
                     } else {
                         if (scroll_offset > 0) scroll_offset -|= 3;
                         auto_scroll = false;
@@ -458,7 +456,7 @@ pub fn main() !void {
                     app.needs_redraw = true;
                 } else if (mouse.button == .wheel_down) {
                     if (app.tool_confirmation.pending) {
-                        preview_scroll += 3;
+                        app.preview_scroll += 3;
                     } else {
                         scroll_offset += 3;
                     }
@@ -657,11 +655,11 @@ pub fn main() !void {
         }
 
         // Input box with border
-        ui.renderTools(frame_arena.allocator(), win, vx.screen.width, layout.preview_y, layout.preview_h, &app, preview_scroll);
+        ui.renderTools(frame_arena.allocator(), win, vx.screen.width, layout.preview_y, layout.preview_h, &app, app.preview_scroll);
 
         // @picker overlay — rendered above the input box
         if (at_picker.active and at_picker.results.items.len > 0) {
-            at_picker.renderFileSelection(win, vx.screen.width, layout.input_y);
+            at_picker.render(win, vx.screen.width, layout.input_y);
         }
 
         if (command_picker.active and command_picker.results.items.len > 0) {

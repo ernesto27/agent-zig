@@ -19,7 +19,9 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
     const build_options = b.addOptions();
+    const tavily_api_key = b.option([]const u8, "tavily-api-key", "Tavily API key for web_search/web_extract") orelse "";
     build_options.addOption([]const u8, "version", app_version);
+    build_options.addOption([]const u8, "tavily_api_key", tavily_api_key);
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -44,6 +46,7 @@ pub fn build(b: *std.Build) void {
         // which requires us to specify a target.
         .target = target,
     });
+    mod.addOptions("build_options", build_options);
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -86,7 +89,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    exe.root_module.addOptions("build_options", build_options);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
