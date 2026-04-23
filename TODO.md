@@ -10,6 +10,8 @@
 [x] - agent.log must be save in .config folder
 [x] - refactor render 
 [x] - when sho preview file,  put scroll at top
+[] - view images analizy
+[] - add plan mode
 [] - when save session,  also save tool response and action
 [] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
 [] - fix model descriptcion space ,  

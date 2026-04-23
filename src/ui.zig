@@ -63,8 +63,13 @@ pub fn loading(elapsed_secs: usize) []const u8 {
     const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };
     const now_ms: u64 = @intCast(std.time.milliTimestamp());
     const frame = frames[(now_ms / 120) % frames.len];
+    const minutes = elapsed_secs / 60;
+    const seconds = elapsed_secs % 60;
 
-    const result = std.fmt.bufPrint(&loadingBuf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame;
+    const result = if (minutes == 0)
+        std.fmt.bufPrint(&loadingBuf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame
+    else
+        std.fmt.bufPrint(&loadingBuf, "{s}({d}m {d}s) ", .{ frame, minutes, seconds }) catch return frame;
     return result;
 }
 
