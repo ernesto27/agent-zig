@@ -5,7 +5,7 @@
 [x] - tool for search internet
 [] - make tool calls in parallet internet
 [] - show read file using
-[] - show seconds, mins, in feedback, now only show seconds
+[x] - show seconds, mins, in feedback, now only show seconds
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder
 [x] - refactor render 

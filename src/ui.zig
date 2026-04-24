@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const agent = @import("agent");
 const App = @import("App.zig").App;
 
 const Event = vaxis.Event;
@@ -237,6 +238,90 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
                 .style = .{ .fg = if (selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = selected },
             }, .{ .row_offset = sel_row + @as(u16, @intCast(idx)), .col_offset = 1 });
         }
+    }
+}
+
+pub fn renderStatus(
+    win: vaxis.Window,
+    screen_w: u16,
+    status_row: u16,
+    app: *App,
+    model: []const u8,
+    effort: agent.llm.message.Effort,
+    app_version: []const u8,
+    clipboard_status: ?[]const u8,
+) void {
+    const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
+    var status_buf: [128]u8 = undefined;
+    var status_right_reserved: u16 = 0;
+    const mode_label = switch (app.mode) {
+        .chat => " CHAT ",
+        .plan => " PLAN ",
+    };
+
+    const version_text = std.fmt.bufPrint(&status_buf, " {s} ", .{app_version}) catch " ? ";
+    const version_col = screen_w -| @as(u16, @intCast(version_text.len)) -| 1;
+    status_right_reserved = @as(u16, @intCast(version_text.len));
+
+    _ = win.printSegment(.{
+        .text = mode_label,
+        .style = .{ .bg = .{ .rgb = .{ 0x30, 0x30, 0x30 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+    }, .{ .row_offset = status_row, .col_offset = 0 });
+
+    var res = win.printSegment(.{
+        .text = std.fmt.bufPrint(&status_buf, " {s} ", .{model}) catch " ? ",
+        .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+    }, .{ .row_offset = status_row, .col_offset = @as(u16, @intCast(mode_label.len + 1)) });
+
+    if (app.tool_confirmation.cursor == .accept_all) {
+        const badge = " accept-all  ctrl+a to reset ";
+        const badge_col = screen_w -| @as(u16, @intCast(badge.len)) -| 1;
+        status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(badge.len)));
+        _ = win.printSegment(.{
+            .text = badge,
+            .style = .{ .bg = .{ .rgb = .{ 0x20, 0x80, 0x40 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        }, .{ .row_offset = status_row, .col_offset = badge_col });
+    }
+
+    if (effort != .none) {
+        var effort_buf: [32]u8 = undefined;
+        const effort_text = std.fmt.bufPrint(&effort_buf, " {s} ", .{effort.label()}) catch " ? ";
+        const effort_col = version_col -| @as(u16, @intCast(effort_text.len));
+        status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(version_text.len + effort_text.len)));
+        _ = win.printSegment(.{
+            .text = effort_text,
+            .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        }, .{ .row_offset = status_row, .col_offset = effort_col });
+    }
+
+    var info_buf: [128]u8 = undefined;
+    const info_text = if (app.tool_status) |tool|
+        std.fmt.bufPrint(&info_buf, " TOOL: {s} ", .{tool}) catch " TOOL "
+    else if (app.is_loading)
+        " THINKING "
+    else
+        " READY ";
+    res = win.printSegment(.{
+        .text = info_text,
+        .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+    }, .{ .row_offset = status_row, .col_offset = res.col });
+
+    var footer_buf: [128]u8 = undefined;
+    const footer_text = if (clipboard_status) |status|
+        std.fmt.bufPrint(&footer_buf, "{s}  ctrl+q: quit", .{status}) catch " ctrl+q: quit"
+    else
+        " ctrl+q: quit";
+    res = win.printSegment(.{
+        .text = footer_text,
+        .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+    }, .{ .row_offset = status_row, .col_offset = res.col });
+    app.context_usage.render(win, res.col, status_row, status_bg);
+
+    if (version_col > res.col and version_col >= status_right_reserved) {
+        _ = win.printSegment(.{
+            .text = version_text,
+            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+        }, .{ .row_offset = status_row, .col_offset = version_col });
     }
 }
 

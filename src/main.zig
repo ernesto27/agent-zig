@@ -207,6 +207,18 @@ pub fn main() !void {
                     }
                 } else if (key.matches('a', .{ .ctrl = true })) {
                     app.tool_confirmation.cursor = .approve;
+                } else if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
+                    const modal_open =
+                        app.tool_confirmation.pending or
+                        at_picker.active or
+                        command_picker.active or
+                        model_picker.active or
+                        provider_picker.active or
+                        app.sessions.active;
+
+                    if (!modal_open) {
+                        app.toggleMode();
+                    }
                 } else if (key.matches(vaxis.Key.escape, .{})) {
                     try handleEscape(alloc, &app, &loop, &at_picker, &command_picker, &model_picker, &provider_picker);
                 } else if (key.matches(vaxis.Key.up, .{})) {
@@ -728,73 +740,16 @@ pub fn main() !void {
 
         // Status
         const status_row: u16 = if (vx.screen.height == 0) 0 else vx.screen.height - 1;
-        const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
-        var status_buf: [128]u8 = undefined;
-        var status_right_reserved: u16 = 0;
-
-        const version_text = " " ++ app_version ++ " ";
-        const version_col = vx.screen.width -| @as(u16, @intCast(version_text.len)) -| 1;
-        status_right_reserved = @as(u16, @intCast(version_text.len));
-
-        // Model name — highlighted
-        var res = win.printSegment(.{
-            .text = std.fmt.bufPrint(&status_buf, " {s} ", .{llm_client.config.model}) catch " ? ",
-            .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-        }, .{ .row_offset = status_row, .col_offset = 0 });
-
-        // Accept-all badge — pinned to the right edge, visible when accept_all is active
-        if (app.tool_confirmation.cursor == .accept_all) {
-            const badge = " accept-all  ctrl+a to reset ";
-            const badge_col = vx.screen.width -| @as(u16, @intCast(badge.len)) -| 1;
-            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(badge.len)));
-            _ = win.printSegment(.{
-                .text = badge,
-                .style = .{ .bg = .{ .rgb = .{ 0x20, 0x80, 0x40 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-            }, .{ .row_offset = status_row, .col_offset = badge_col });
-        }
-
-        // Effort badge — pinned to the right edge, only visible when thinking is on
-        if (llm_client.config.effort != .none) {
-            var effort_buf: [32]u8 = undefined;
-            const effort_text = std.fmt.bufPrint(&effort_buf, " {s} ", .{llm_client.config.effort.label()}) catch " ? ";
-            const effort_col = version_col -| @as(u16, @intCast(effort_text.len));
-            status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(version_text.len + effort_text.len)));
-            _ = win.printSegment(.{
-                .text = effort_text,
-                .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-            }, .{ .row_offset = status_row, .col_offset = effort_col });
-        }
-
-        // State / tool info
-        var info_buf: [128]u8 = undefined;
-        const info_text = if (app.tool_status) |tool|
-            std.fmt.bufPrint(&info_buf, " TOOL: {s} ", .{tool}) catch " TOOL "
-        else if (app.is_loading)
-            " THINKING "
-        else
-            " READY ";
-        res = win.printSegment(.{
-            .text = info_text,
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
-        }, .{ .row_offset = status_row, .col_offset = res.col });
-
-        var footer_buf: [128]u8 = undefined;
-        const footer_text = if (clipboard_status) |status|
-            std.fmt.bufPrint(&footer_buf, "{s}  ctrl+q: quit", .{status}) catch " ctrl+q: quit"
-        else
-            " ctrl+q: quit";
-        res = win.printSegment(.{
-            .text = footer_text,
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
-        }, .{ .row_offset = status_row, .col_offset = res.col });
-        app.context_usage.render(win, res.col, status_row, status_bg);
-
-        if (version_col > res.col and version_col >= status_right_reserved) {
-            _ = win.printSegment(.{
-                .text = version_text,
-                .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
-            }, .{ .row_offset = status_row, .col_offset = version_col });
-        }
+        ui.renderStatus(
+            win,
+            vx.screen.width,
+            status_row,
+            &app,
+            llm_client.config.model,
+            llm_client.config.effort,
+            app_version,
+            clipboard_status,
+        );
 
         try vx.render(tty.writer());
         app.needs_redraw = false;
