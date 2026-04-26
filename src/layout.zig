@@ -9,8 +9,7 @@ pub const Layout = struct {
     input_y: u16,
 };
 
-pub fn compute(screen_height: u16, app: *App) Layout {
-    const input_box_h: u16 = 3; // top border + 1 content row + bottom border
+pub fn compute(screen_height: u16, app: *App, input_box_h: u16) Layout {
     const chat_y: u16 = 1;
     const show_grep_panel = app.grep_status.pattern.len > 0 or
         (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "grep"));

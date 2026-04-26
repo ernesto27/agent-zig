@@ -347,6 +347,11 @@ pub fn main() !void {
                             try command_picker.updateFromInput(alloc, input.items);
                         }
                     }
+                } else if (((key.codepoint == '\r' or key.codepoint == '\n') and key.mods.shift) or
+                    key.matches('j', .{ .ctrl = true }))
+                {
+                    try input.insert(alloc, cursor_pos, '\n');
+                    cursor_pos += 1;
                 } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
                     if (app.tool_confirmation.pending) {
                         try app.resolveToolConfirmation(alloc, app.tool_confirmation.cursor);
@@ -478,7 +483,8 @@ pub fn main() !void {
                     defer mouse_arena.deinit();
 
                     app.mutex.lock();
-                    const layout = layout_mod.compute(vx.screen.height, &app);
+                    const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, input.items, vx.screen.width, cursor_pos);
+                    const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
                     const rendered_lines = chat_selection.buildRenderedLines(&app, mouse_arena.allocator(), if (vx.screen.width > 0) vx.screen.width else 1, vx.screen.width_method) catch &.{};
                     app.mutex.unlock();
 
@@ -571,7 +577,8 @@ pub fn main() !void {
             .style = .{ .bg = .{ .rgb = .{ 0x30, 0x80, 0xD0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 0 });
 
-        const layout = layout_mod.compute(vx.screen.height, &app);
+        const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, input.items, vx.screen.width, cursor_pos);
+        const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
 
         // Chat area
         const chat_win = win.child(.{
@@ -697,7 +704,7 @@ pub fn main() !void {
             .x_off = 0,
             .y_off = layout.input_y,
             .width = vx.screen.width,
-            .height = 3,
+            .height = input_layout.view.box_h,
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
@@ -713,29 +720,7 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
             }, .{ .row_offset = 0, .col_offset = 1 });
         } else {
-            const prompt = if (app.is_loading) ui.loading(app.getElapsedSeconds() orelse 0) else "> ";
-            _ = input_win.printSegment(.{
-                .text = prompt,
-                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
-            }, .{ .row_offset = 0, .col_offset = 1 });
-            const text_col: u16 = 1 + @as(u16, @intCast(prompt.len));
-            if (cursor_pos > 0) {
-                _ = input_win.printSegment(.{
-                    .text = input.items[0..cursor_pos],
-                    .style = .{ .bold = true },
-                }, .{ .row_offset = 0, .col_offset = text_col });
-            }
-            const cursor_char: []const u8 = if (cursor_pos < input.items.len) input.items[cursor_pos .. cursor_pos + 1] else " ";
-            _ = input_win.printSegment(.{
-                .text = cursor_char,
-                .style = .{ .bold = true, .reverse = true },
-            }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) });
-            if (cursor_pos < input.items.len) {
-                _ = input_win.printSegment(.{
-                    .text = input.items[cursor_pos + 1 ..],
-                    .style = .{ .bold = true },
-                }, .{ .row_offset = 0, .col_offset = text_col + @as(u16, @intCast(cursor_pos)) + 1 });
-            }
+            ui.renderInput(input_win, input_layout.prompt, input.items, cursor_pos, input_layout.view);
         }
 
         // Status

@@ -58,6 +58,213 @@ pub fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_
     return lines;
 }
 
+const InputLine = struct {
+    start: usize,
+    end: usize,
+};
+
+pub const InputView = struct {
+    lines: []const InputLine,
+    cursor_row: usize,
+    cursor_col: usize,
+    visible_start: usize,
+    visible_count: usize,
+    box_h: u16,
+};
+
+pub const InputLayout = struct {
+    prompt: []const u8,
+    view: InputView,
+};
+
+const max_input_body_lines: usize = 6;
+
+fn buildInputLines(
+    alloc: std.mem.Allocator,
+    input: []const u8,
+    first_width: usize,
+    rest_width: usize,
+) ![]const InputLine {
+    var lines = std.ArrayList(InputLine){};
+    errdefer lines.deinit(alloc);
+
+    const first_limit = @max(first_width, 1);
+    const next_limit = @max(rest_width, 1);
+    var limit = first_limit;
+    var line_start: usize = 0;
+    var col: usize = 0;
+    var i: usize = 0;
+
+    while (i < input.len) {
+        if (input[i] == '\n') {
+            try lines.append(alloc, .{ .start = line_start, .end = i });
+            line_start = i + 1;
+            col = 0;
+            limit = next_limit;
+            i += 1;
+            continue;
+        }
+
+        if (col == limit) {
+            try lines.append(alloc, .{ .start = line_start, .end = i });
+            line_start = i;
+            col = 0;
+            limit = next_limit;
+            continue;
+        }
+
+        col += 1;
+        i += 1;
+    }
+
+    try lines.append(alloc, .{ .start = line_start, .end = input.len });
+    return lines.toOwnedSlice(alloc);
+}
+
+fn cursorCell(input: []const u8, cursor_pos: usize, first_width: usize, rest_width: usize) struct { row: usize, col: usize } {
+    const first_limit = @max(first_width, 1);
+    const next_limit = @max(rest_width, 1);
+    var limit = first_limit;
+    var row: usize = 0;
+    var col: usize = 0;
+    var i: usize = 0;
+
+    while (i < cursor_pos and i < input.len) {
+        if (input[i] == '\n') {
+            row += 1;
+            col = 0;
+            limit = next_limit;
+            i += 1;
+            continue;
+        }
+
+        if (col == limit) {
+            row += 1;
+            col = 0;
+            limit = next_limit;
+            continue;
+        }
+
+        col += 1;
+        i += 1;
+    }
+
+    if (cursor_pos < input.len and input[cursor_pos] != '\n' and col == limit) {
+        row += 1;
+        col = 0;
+    }
+
+    return .{ .row = row, .col = col };
+}
+
+pub fn buildInputView(
+    alloc: std.mem.Allocator,
+    input: []const u8,
+    prompt: []const u8,
+    screen_width: u16,
+    cursor_pos: usize,
+) !InputView {
+    const inner_width: usize = if (screen_width > 2) @intCast(screen_width - 2) else 1;
+    const first_width: usize = if (prompt.len < inner_width) inner_width - prompt.len else 1;
+    const rest_width: usize = inner_width;
+    const lines = try buildInputLines(alloc, input, first_width, rest_width);
+    errdefer alloc.free(lines);
+    const cell = cursorCell(input, cursor_pos, first_width, rest_width);
+    const visible_count: usize = @max(@as(usize, 1), @min(lines.len, max_input_body_lines));
+    const visible_start = @min(if (cell.row + 1 > visible_count) cell.row + 1 - visible_count else 0, lines.len -| visible_count);
+
+    return .{
+        .lines = lines,
+        .cursor_row = cell.row,
+        .cursor_col = cell.col,
+        .visible_start = visible_start,
+        .visible_count = visible_count,
+        .box_h = @as(u16, @intCast(visible_count + 2)),
+    };
+}
+
+pub fn buildInputLayout(
+    alloc: std.mem.Allocator,
+    app: *App,
+    input: []const u8,
+    screen_width: u16,
+    cursor_pos: usize,
+) InputLayout {
+    const prompt = if (app.is_loading) loading(app.getElapsedSeconds() orelse 0) else "> ";
+    const fallback: InputView = .{
+        .lines = &.{},
+        .cursor_row = 0,
+        .cursor_col = 0,
+        .visible_start = 0,
+        .visible_count = 1,
+        .box_h = 3,
+    };
+    const view = buildInputView(alloc, input, prompt, screen_width, cursor_pos) catch fallback;
+    return .{
+        .prompt = prompt,
+        .view = view,
+    };
+}
+
+pub fn renderInput(
+    input_win: vaxis.Window,
+    prompt: []const u8,
+    input: []const u8,
+    cursor_pos: usize,
+    view: InputView,
+) void {
+    const show_prompt = view.visible_start == 0;
+    if (show_prompt) {
+        _ = input_win.printSegment(.{
+            .text = prompt,
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+        }, .{ .row_offset = 0, .col_offset = 1 });
+    }
+
+    const visible_end = @min(view.visible_start + view.visible_count, view.lines.len);
+    for (view.lines[view.visible_start..visible_end], 0..) |line, row_idx| {
+        const render_row: u16 = @intCast(row_idx);
+        const logical_row = view.visible_start + row_idx;
+        const line_text = input[line.start..line.end];
+        const text_col: u16 = if (show_prompt and row_idx == 0)
+            1 + @as(u16, @intCast(prompt.len))
+        else
+            1;
+        const cursor_on_row = logical_row == view.cursor_row;
+        const cursor_is_text = cursor_pos < input.len and input[cursor_pos] != '\n';
+        const cursor_col = @min(view.cursor_col, line_text.len);
+
+        if (cursor_on_row) {
+            if (cursor_col > 0) {
+                _ = input_win.printSegment(.{
+                    .text = line_text[0..cursor_col],
+                    .style = .{ .bold = true },
+                }, .{ .row_offset = render_row, .col_offset = text_col });
+            }
+
+            const cursor_char: []const u8 = if (cursor_is_text and cursor_col < line_text.len) line_text[cursor_col .. cursor_col + 1] else " ";
+            _ = input_win.printSegment(.{
+                .text = cursor_char,
+                .style = .{ .bold = true, .reverse = true },
+            }, .{ .row_offset = render_row, .col_offset = text_col + @as(u16, @intCast(cursor_col)) });
+
+            if (cursor_is_text) {
+                if (cursor_col + 1 < line_text.len) {
+                    _ = input_win.printSegment(.{
+                        .text = line_text[cursor_col + 1 ..],
+                        .style = .{ .bold = true },
+                    }, .{ .row_offset = render_row, .col_offset = text_col + @as(u16, @intCast(cursor_col)) + 1 });
+                }
+            }
+        } else {
+            _ = input_win.printSegment(.{
+                .text = line_text,
+                .style = .{ .bold = true },
+            }, .{ .row_offset = render_row, .col_offset = text_col });
+        }
+    }
+}
+
 var loadingBuf: [32]u8 = undefined;
 
 pub fn loading(elapsed_secs: usize) []const u8 {
