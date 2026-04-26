@@ -5,6 +5,8 @@
 [x] - tool for search internet
 [] - make tool calls in parallet internet
 [] - show read file using
+[] - change font text
+[] - ctrl+c prevent close app, ask
 [x] - show seconds, mins, in feedback, now only show seconds
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder

@@ -224,12 +224,20 @@ pub const App = struct {
         self.pending_attachments.clearRetainingCapacity();
     }
 
+    fn stripProposedPlanTags(self: *Self, input: []const u8) ![]u8 {
+        const without_open = try std.mem.replaceOwned(u8, self.alloc, input, "<proposed_plan>", "");
+        defer self.alloc.free(without_open);
+        return std.mem.replaceOwned(u8, self.alloc, without_open, "</proposed_plan>", "");
+    }
+
     pub fn getStyledLines(self: *Self, msg: *Message) ![]const agent.markdown.StyledLine {
         if (msg.styled_lines != null and msg.styled_content_len == msg.content.len) {
             return msg.styled_lines.?;
         }
         if (msg.styled_lines) |old| agent.markdown.freeLines(self.alloc, old);
-        const lines = try agent.markdown.parse(self.alloc, msg.content);
+        const content = try self.stripProposedPlanTags(msg.content);
+        defer self.alloc.free(content);
+        const lines = try agent.markdown.parse(self.alloc, content);
         if (msg.is_error) {
             for (lines) |line| {
                 for (line.spans) |*span| {
