@@ -12,6 +12,7 @@ const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 
 const log_mod = @import("log.zig");
+const input_handler = @import("input_handler.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -26,76 +27,6 @@ pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize)
     std.process.exit(1);
 }
 
-fn spawnLlmRequest(
-    alloc: std.mem.Allocator,
-    app: *App,
-    loop: *EventLoop,
-    spinner_state: *ui.SpinnerState,
-    auto_scroll: *bool,
-) !void {
-    app.mutex.lock();
-    try app.messages.append(alloc, .{ .role = .assistant, .content = try alloc.dupe(u8, "") });
-    app.setLoading(true);
-    app.mutex.unlock();
-    auto_scroll.* = true;
-    const generation = spinner_state.generation.fetchAdd(1, .acq_rel) + 1;
-    const spinner = try std.Thread.spawn(.{}, ui.spinnerThread, .{ app, loop, spinner_state, generation });
-    spinner.detach();
-    const thread = try std.Thread.spawn(.{}, App.fetchAiResponse, .{ app, loop });
-    thread.detach();
-}
-
-fn runSlashCommand(
-    alloc: std.mem.Allocator,
-    action: command_picker_mod.CommandAction,
-    input: *std.ArrayList(u8),
-    cursor_pos: *usize,
-    model_picker: *model_picker_mod.ModelPicker,
-    provider_picker: *provider_picker_mod.ProviderPicker,
-    app: *App,
-) !bool {
-    input.clearRetainingCapacity();
-    cursor_pos.* = 0;
-
-    switch (action) {
-        .provider => provider_picker.open(),
-        .model => try model_picker.open(alloc),
-        .clear => app.clearHistory(),
-        .resume_session => app.sessions.open(),
-        .init => {
-            if (app.is_loading) return false;
-            try app.initCMD();
-            return true;
-        },
-    }
-    return false;
-}
-
-fn handleEscape(
-    alloc: std.mem.Allocator,
-    app: *App,
-    loop: *EventLoop,
-    at_picker: *at_picker_mod.AtPicker,
-    command_picker: *command_picker_mod.CommandPicker,
-    model_picker: *model_picker_mod.ModelPicker,
-    provider_picker: *provider_picker_mod.ProviderPicker,
-) !void {
-    if (app.tool_confirmation.pending) {
-        try app.resolveToolConfirmation(alloc, .deny);
-    } else if (app.cancelActiveRequest(loop)) {
-        return;
-    } else if (at_picker.active) {
-        at_picker.reset(alloc);
-    } else if (command_picker.active) {
-        command_picker.reset(alloc);
-    } else if (model_picker.active) {
-        model_picker.reset(alloc);
-    } else if (provider_picker.active) {
-        provider_picker.reset(alloc);
-    } else if (app.sessions.active) {
-        app.sessions.reset();
-    }
-}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -168,20 +99,32 @@ pub fn main() !void {
     var running = true;
     var scroll_offset: usize = 0;
     var auto_scroll = true;
-    var input = std.ArrayList(u8){};
-    defer input.deinit(alloc);
-    var cursor_pos: usize = 0;
-    var history = std.ArrayList([]const u8){};
+    var spinner_state = ui.SpinnerState{};
+    var ctx = input_handler.InputContext{
+        .alloc = alloc,
+        .app = &app,
+        .loop = &loop,
+        .at_picker = &at_picker,
+        .command_picker = &command_picker,
+        .model_picker = &model_picker,
+        .provider_picker = &provider_picker,
+        .spinner_state = &spinner_state,
+        .auto_scroll = &auto_scroll,
+        .config = &config,
+        .input = .{},
+        .cursor_pos = 0,
+        .history = .{},
+        .history_idx = null,
+        .draft = .{},
+    };
     defer {
-        for (history.items) |s| alloc.free(s);
-        history.deinit(alloc);
+        ctx.input.deinit(alloc);
+        ctx.draft.deinit(alloc);
+        for (ctx.history.items) |s| alloc.free(s);
+        ctx.history.deinit(alloc);
     }
-    var history_idx: ?usize = null;
-    var draft = std.ArrayList(u8){};
-    defer draft.deinit(alloc);
     var selection: chat_selection.SelectionState = .{};
     var clipboard_status: ?[]const u8 = null;
-    var spinner_state = ui.SpinnerState{};
     var bracketed_paste = false;
     var paste_buf = std.ArrayList(u8){};
     defer paste_buf.deinit(alloc);
@@ -192,262 +135,11 @@ pub fn main() !void {
         switch (event) {
             .key_press => |key| {
                 if (bracketed_paste) {
-                    if (key.text) |txt| {
-                        try paste_buf.appendSlice(alloc, txt);
-                    }
+                    if (key.text) |txt| try paste_buf.appendSlice(alloc, txt);
                     // Skip redraw during paste — one redraw at paste_end is enough
                     continue;
                 }
-                if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
-                    running = false;
-                } else if (key.matches('t', .{ .ctrl = true })) {
-                    const model = model_picker_mod.findModel(llm_client.config.model);
-                    if (model != null and model.?.model.supports_thinking) {
-                        llm_client.config.effort = llm_client.config.effort.next();
-                    }
-                } else if (key.matches('a', .{ .ctrl = true })) {
-                    app.tool_confirmation.cursor = .approve;
-                } else if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
-                    const modal_open =
-                        app.tool_confirmation.pending or
-                        at_picker.active or
-                        command_picker.active or
-                        model_picker.active or
-                        provider_picker.active or
-                        app.sessions.active;
-
-                    if (!modal_open) {
-                        app.toggleMode();
-                    }
-                } else if (key.matches(vaxis.Key.escape, .{})) {
-                    try handleEscape(alloc, &app, &loop, &at_picker, &command_picker, &model_picker, &provider_picker);
-                } else if (key.matches(vaxis.Key.up, .{})) {
-                    if (at_picker.active) {
-                        if (at_picker.selected > 0) at_picker.selected -= 1;
-                    } else if (command_picker.active) {
-                        if (command_picker.selected > 0) command_picker.selected -= 1;
-                    } else if (model_picker.active) {
-                        if (model_picker.selected > 0) model_picker.selected -= 1;
-                    } else if (provider_picker.active and provider_picker.phase == .list) {
-                        if (provider_picker.selected > 0) provider_picker.selected -= 1;
-                    } else if (app.sessions.active) {
-                        if (app.sessions.selected > 0) {
-                            app.sessions.selected -= 1;
-                            if (app.sessions.selected < app.sessions.scroll)
-                                app.sessions.scroll -= 1;
-                        }
-                    } else if (app.tool_confirmation.pending) {
-                        app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
-                            .approve => .accept_all,
-                            .deny => .approve,
-                            .accept_all => .deny,
-                        };
-                    } else if (!app.tool_confirmation.pending and history.items.len > 0) {
-                        if (history_idx == null) {
-                            draft.clearRetainingCapacity();
-                            try draft.appendSlice(alloc, input.items);
-                            history_idx = history.items.len - 1;
-                        } else if (history_idx.? > 0) {
-                            history_idx = history_idx.? - 1;
-                        }
-                        input.clearRetainingCapacity();
-                        try input.appendSlice(alloc, history.items[history_idx.?]);
-                        cursor_pos = input.items.len;
-                        try command_picker.updateFromInput(alloc, input.items);
-                    }
-                } else if (key.matches(vaxis.Key.down, .{})) {
-                    if (at_picker.active) {
-                        if (at_picker.selected + 1 < at_picker.results.items.len)
-                            at_picker.selected += 1;
-                    } else if (command_picker.active) {
-                        if (command_picker.selected + 1 < command_picker.results.items.len)
-                            command_picker.selected += 1;
-                    } else if (model_picker.active) {
-                        if (model_picker.selected + 1 < model_picker.results.items.len)
-                            model_picker.selected += 1;
-                    } else if (provider_picker.active and provider_picker.phase == .list) {
-                        if (provider_picker.selected + 1 < model_picker_mod.providers.len)
-                            provider_picker.selected += 1;
-                    } else if (app.sessions.active) {
-                        if (app.sessions.selected + 1 < app.sessions.entries.items.len) {
-                            app.sessions.selected += 1;
-                            if (app.sessions.selected >= app.sessions.scroll + @TypeOf(app.sessions).max_visible)
-                                app.sessions.scroll += 1;
-                        }
-                    } else if (app.tool_confirmation.pending) {
-                        app.tool_confirmation.cursor = switch (app.tool_confirmation.cursor) {
-                            .approve => .deny,
-                            .deny => .accept_all,
-                            .accept_all => .approve,
-                        };
-                    } else if (!app.tool_confirmation.pending and history_idx != null) {
-                        if (history_idx.? + 1 < history.items.len) {
-                            history_idx = history_idx.? + 1;
-                            input.clearRetainingCapacity();
-                            try input.appendSlice(alloc, history.items[history_idx.?]);
-                        } else {
-                            history_idx = null;
-                            input.clearRetainingCapacity();
-                            try input.appendSlice(alloc, draft.items);
-                        }
-                        cursor_pos = input.items.len;
-                        try command_picker.updateFromInput(alloc, input.items);
-                    }
-                } else if (key.matches(vaxis.Key.left, .{})) {
-                    if (cursor_pos > 0) cursor_pos -= 1;
-                } else if (key.matches(vaxis.Key.right, .{})) {
-                    if (cursor_pos < input.items.len) cursor_pos += 1;
-                } else if (key.codepoint == 127 or key.codepoint == 8) {
-                    if (provider_picker.active and provider_picker.phase == .key_input) {
-                        if (provider_picker.key_input.items.len > 0)
-                            _ = provider_picker.key_input.orderedRemove(provider_picker.key_input.items.len - 1);
-                    } else if (model_picker.active) {
-                        if (model_picker.query.items.len > 0) {
-                            _ = model_picker.query.orderedRemove(model_picker.query.items.len - 1);
-                            try model_picker.refresh(alloc);
-                        }
-                    } else if (cursor_pos > 0) {
-                        _ = input.orderedRemove(cursor_pos - 1);
-                        cursor_pos -= 1;
-                        if (at_picker.active) {
-                            if (cursor_pos <= at_picker.at_start) {
-                                at_picker.reset(alloc);
-                            } else {
-                                at_picker.query.clearRetainingCapacity();
-                                const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
-                                try at_picker.query.appendSlice(alloc, after_at);
-                                try at_picker.refresh(alloc);
-                            }
-                        }
-                        try command_picker.updateFromInput(alloc, input.items);
-                    }
-                } else if (key.text) |txt| {
-                    if (provider_picker.active and provider_picker.phase == .key_input) {
-                        try provider_picker.key_input.appendSlice(alloc, txt);
-                    } else if (model_picker.active) {
-                        try model_picker.query.appendSlice(alloc, txt);
-                        try model_picker.refresh(alloc);
-                    } else if (txt.len > 0) {
-                        try input.insertSlice(alloc, cursor_pos, txt);
-                        cursor_pos += txt.len;
-                        if (std.mem.eql(u8, txt, "@") and !at_picker.active) {
-                            at_picker.active = true;
-                            at_picker.at_start = cursor_pos - 1;
-                            try at_picker.refresh(alloc);
-                        } else if (at_picker.active) {
-                            // Only refresh @ picker for single-char input during paste
-                            if (txt.len == 1) {
-                                at_picker.query.clearRetainingCapacity();
-                                const after_at = input.items[at_picker.at_start + 1 .. cursor_pos];
-                                try at_picker.query.appendSlice(alloc, after_at);
-                                try at_picker.refresh(alloc);
-                            }
-                        }
-                        if (txt.len == 1) {
-                            try command_picker.updateFromInput(alloc, input.items);
-                        }
-                    }
-                } else if (((key.codepoint == '\r' or key.codepoint == '\n') and key.mods.shift) or
-                    key.matches('j', .{ .ctrl = true }))
-                {
-                    try input.insert(alloc, cursor_pos, '\n');
-                    cursor_pos += 1;
-                } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
-                    if (app.tool_confirmation.pending) {
-                        try app.resolveToolConfirmation(alloc, app.tool_confirmation.cursor);
-                    } else if (command_picker.active) {
-                        var should_send = false;
-                        if (command_picker.selectedCommand()) |command| {
-                            should_send = try runSlashCommand(alloc, command.action, &input, &cursor_pos, &model_picker, &provider_picker, &app);
-                        }
-                        command_picker.reset(alloc);
-                        if (should_send and !app.is_loading) {
-                            try spawnLlmRequest(alloc, &app, &loop, &spinner_state, &auto_scroll);
-                        }
-                    } else if (at_picker.active and at_picker.results.items.len > 0) {
-                        // Confirm file selection — do NOT submit message
-                        const picked_path = at_picker.results.items[at_picker.selected];
-
-                        // Track the pick BEFORE reset() frees results
-                        try at_picker.addPicked(alloc, picked_path);
-
-                        // Replace '@query' with '@full/relative/path'
-                        var replacement = std.ArrayList(u8){};
-                        defer replacement.deinit(alloc);
-                        try replacement.append(alloc, '@');
-                        try replacement.appendSlice(alloc, picked_path);
-
-                        const span_len = cursor_pos - at_picker.at_start;
-                        var i: usize = 0;
-                        while (i < span_len) : (i += 1) {
-                            _ = input.orderedRemove(at_picker.at_start);
-                        }
-                        try input.insertSlice(alloc, at_picker.at_start, replacement.items);
-                        cursor_pos = at_picker.at_start + replacement.items.len;
-
-                        at_picker.reset(alloc);
-                    } else if (model_picker.active and model_picker.results.items.len > 0) {
-                        const selected = model_picker.results.items[model_picker.selected];
-                        app.llm_client.config.model = selected.id;
-                        config.selected = selected.id;
-                        if (agent.llm.providers.findModel(selected.id)) |found| {
-                            app.llm_client.config.provider_name = found.provider.name;
-                            if (config.forProvider(found.provider.name)) |pc| {
-                                app.llm_client.config.base_url = pc.baseUrl;
-                                app.llm_client.config.api_key = pc.apiKey;
-                                pc.model = selected.id;
-                            }
-                        }
-                        agent.config.save(alloc, config) catch {};
-                        model_picker.reset(alloc);
-                    } else if (provider_picker.active and provider_picker.phase == .list) {
-                        provider_picker.phase = .key_input;
-                    } else if (provider_picker.active and provider_picker.phase == .key_input) {
-                        if (provider_picker.key_input.items.len > 0) {
-                            const new_key = provider_picker.key_input.items;
-                            const provider_name = provider_picker.selectedProvider().name;
-                            app.llm_client.config.api_key = new_key;
-                            app.llm_client.config.provider_name = provider_name;
-                            if (config.forProvider(provider_name)) |pc| {
-                                pc.apiKey = new_key;
-                            }
-                            agent.config.save(alloc, config) catch {};
-                        }
-                        provider_picker.reset(alloc);
-                    } else if (app.sessions.active and app.sessions.entries.items.len > 0) {
-                        const selected = app.sessions.entries.items[app.sessions.selected];
-                        app.mutex.lock();
-                        if (app.sessions.readFileContent(alloc, selected.filename)) |ctx| {
-                            app.clearHistory();
-                            app.messages.append(alloc, .{ .role = .user, .content = ctx }) catch {};
-                            app.appendToHistory(alloc, ctx) catch {};
-                            app.mutex.unlock();
-                            std.log.info("session content:\n{s}", .{ctx});
-                        } else |err| {
-                            app.mutex.unlock();
-                            std.log.err("failed to read session: {}", .{err});
-                        }
-                        app.sessions.reset();
-                    } else if (input.items.len > 0 and !app.is_loading) {
-                        app.mutex.lock();
-
-                        const picked = at_picker.takePicked(alloc, input.items);
-                        defer alloc.free(picked);
-                        for (picked) |p| app.pending_attachments.append(alloc, p) catch alloc.free(p);
-
-                        const user_text = try alloc.dupe(u8, input.items);
-                        try app.messages.append(alloc, .{ .role = .user, .content = user_text });
-                        app.mutex.unlock();
-
-                        try history.append(alloc, try alloc.dupe(u8, input.items));
-                        history_idx = null;
-                        draft.clearRetainingCapacity();
-                        input.clearRetainingCapacity();
-                        cursor_pos = 0;
-
-                        try spawnLlmRequest(alloc, &app, &loop, &spinner_state, &auto_scroll);
-                    }
-                }
+                if (try input_handler.handleKey(&ctx, key)) running = false;
                 app.needs_redraw = true;
             },
             .paste_start => {
@@ -456,10 +148,7 @@ pub fn main() !void {
             },
             .paste_end => {
                 bracketed_paste = false;
-                if (paste_buf.items.len > 0) {
-                    try input.insertSlice(alloc, cursor_pos, paste_buf.items);
-                    cursor_pos += paste_buf.items.len;
-                }
+                try input_handler.handlePasteEnd(&ctx, paste_buf.items);
                 app.needs_redraw = true;
             },
             .mouse => |mouse| {
@@ -483,7 +172,7 @@ pub fn main() !void {
                     defer mouse_arena.deinit();
 
                     app.mutex.lock();
-                    const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, input.items, vx.screen.width, cursor_pos);
+                    const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
                     const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
                     const rendered_lines = chat_selection.buildRenderedLines(&app, mouse_arena.allocator(), if (vx.screen.width > 0) vx.screen.width else 1, vx.screen.width_method) catch &.{};
                     app.mutex.unlock();
@@ -577,7 +266,7 @@ pub fn main() !void {
             .style = .{ .bg = .{ .rgb = .{ 0x30, 0x80, 0xD0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 0 });
 
-        const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, input.items, vx.screen.width, cursor_pos);
+        const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
         const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
 
         // Chat area
@@ -720,7 +409,7 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
             }, .{ .row_offset = 0, .col_offset = 1 });
         } else {
-            ui.renderInput(input_win, input_layout.prompt, input.items, cursor_pos, input_layout.view);
+            ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view);
         }
 
         // Status
