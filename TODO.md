@@ -7,6 +7,7 @@
 [] - show read file using
 [] - change font text
 [] - suuport skills protocol
+[] - exit command
 [] - when accept all changes,  show files and dir created in preview
 [] - model name at right bottom is cut /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-26 21-20-28.png
 [] - ctrl+c prevent close app, ask

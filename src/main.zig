@@ -52,6 +52,8 @@ pub fn main() !void {
     var command_picker = command_picker_mod.CommandPicker.init();
     defer command_picker.deinit(alloc);
 
+    var show_exit: bool = false;
+
     var at_picker = at_picker_mod.AtPicker.init();
     defer at_picker.deinit(alloc);
 
@@ -111,6 +113,7 @@ pub fn main() !void {
         .spinner_state = &spinner_state,
         .auto_scroll = &auto_scroll,
         .config = &config,
+        .show_exit = &show_exit,
         .input = .{},
         .cursor_pos = 0,
         .history = .{},
@@ -423,6 +426,7 @@ pub fn main() !void {
             llm_client.config.effort,
             app_version,
             clipboard_status,
+            show_exit,
         );
 
         try vx.render(tty.writer());

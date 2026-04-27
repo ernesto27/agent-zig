@@ -8,7 +8,11 @@ const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 const ui = @import("ui.zig");
 
+const log = std.log.scoped(.input_handler);
+
 const EventLoop = vaxis.Loop(vaxis.Event);
+
+var countCtrlPlusC: u32 = 0;
 
 pub const InputContext = struct {
     // borrowed — owned by main()
@@ -22,6 +26,7 @@ pub const InputContext = struct {
     spinner_state: *ui.SpinnerState,
     auto_scroll: *bool,
     config: *agent.config.Config,
+    show_exit: *bool,
 
     // owned
     input: std.ArrayList(u8),
@@ -33,7 +38,7 @@ pub const InputContext = struct {
 
 /// Returns true if the app should quit.
 pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
-    if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
+    if (key.matches('q', .{ .ctrl = true })) {
         return true;
     } else if (key.matches('t', .{ .ctrl = true })) {
         const model = model_picker_mod.findModel(ctx.app.llm_client.config.model);
@@ -42,7 +47,11 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
     } else if (key.matches('a', .{ .ctrl = true })) {
         ctx.app.tool_confirmation.cursor = .approve;
     }  else if (key.matches('c', .{ .ctrl = true })) {
-
+        countCtrlPlusC += 1;
+        ctx.show_exit.* = true;
+        if (countCtrlPlusC == 2) {
+            return true;
+        }
     } else if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
         const modal_open =
             ctx.app.tool_confirmation.pending or
@@ -53,6 +62,8 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.app.sessions.active;
         if (!modal_open) ctx.app.toggleMode();
     } else if (key.matches(vaxis.Key.escape, .{})) {
+        countCtrlPlusC -|= 1;
+        ctx.show_exit.* = false;
         try handleEscape(ctx);
     } else if (key.matches(vaxis.Key.up, .{})) {
         try handleArrow(ctx, .up);

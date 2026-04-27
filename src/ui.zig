@@ -457,6 +457,7 @@ pub fn renderStatus(
     effort: agent.llm.message.Effort,
     app_version: []const u8,
     clipboard_status: ?[]const u8,
+    show_exit: bool,
 ) void {
     const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
     var status_buf: [128]u8 = undefined;
@@ -522,6 +523,12 @@ pub fn renderStatus(
         .text = footer_text,
         .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
     }, .{ .row_offset = status_row, .col_offset = res.col });
+    if (show_exit) {
+        res = win.printSegment(.{
+            .text = "  ctrl+c again to exit ",
+            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0x88 } } },
+        }, .{ .row_offset = status_row, .col_offset = res.col });
+    }
     app.context_usage.render(win, res.col, status_row, status_bg);
 
     if (version_col > res.col and version_col >= status_right_reserved) {

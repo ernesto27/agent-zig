@@ -31,8 +31,9 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16) Layout {
         break :blk @max(needed, 8);
     } else if (show_grep_panel or show_glob_panel) 8 else if (show_web_panel) 3 else 0;
 
-    const chat_h_total: u16 = if (screen_height > 1 + input_box_h + preview_h + 1)
-        screen_height - 1 - input_box_h - preview_h - 1
+    const exit_hint_h: u16 = 0;
+    const chat_h_total: u16 = if (screen_height > 1 + input_box_h + preview_h + 1 + exit_hint_h)
+        screen_height - 1 - input_box_h - preview_h - 1 - exit_hint_h
     else
         1;
     const preview_y: u16 = chat_y + chat_h_total;
