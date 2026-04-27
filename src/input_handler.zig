@@ -41,6 +41,8 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.app.llm_client.config.effort = ctx.app.llm_client.config.effort.next();
     } else if (key.matches('a', .{ .ctrl = true })) {
         ctx.app.tool_confirmation.cursor = .approve;
+    }  else if (key.matches('c', .{ .ctrl = true })) {
+
     } else if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
         const modal_open =
             ctx.app.tool_confirmation.pending or
