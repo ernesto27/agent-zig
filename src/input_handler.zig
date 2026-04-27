@@ -46,7 +46,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.app.llm_client.config.effort = ctx.app.llm_client.config.effort.next();
     } else if (key.matches('a', .{ .ctrl = true })) {
         ctx.app.tool_confirmation.cursor = .approve;
-    }  else if (key.matches('c', .{ .ctrl = true })) {
+    } else if (key.matches('c', .{ .ctrl = true })) {
         countCtrlPlusC += 1;
         ctx.show_exit.* = true;
         if (countCtrlPlusC == 2) {
@@ -83,7 +83,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         try ctx.input.insert(ctx.alloc, ctx.cursor_pos, '\n');
         ctx.cursor_pos += 1;
     } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
-        try handleEnter(ctx);
+        if (try handleEnter(ctx)) return true;
     }
     return false;
 }
@@ -110,7 +110,9 @@ fn spawnLlmRequest(ctx: *InputContext) !void {
     thread.detach();
 }
 
-fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction) !bool {
+const SlashResult = enum { none, send, quit };
+
+fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction) !SlashResult {
     ctx.input.clearRetainingCapacity();
     ctx.cursor_pos = 0;
     switch (action) {
@@ -119,12 +121,13 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
         .clear => ctx.app.clearHistory(),
         .resume_session => ctx.app.sessions.open(),
         .init => {
-            if (ctx.app.is_loading) return false;
+            if (ctx.app.is_loading) return .none;
             try ctx.app.initCMD();
-            return true;
+            return .send;
         },
+        .exit => return .quit,
     }
-    return false;
+    return .none;
 }
 
 fn handleEscape(ctx: *InputContext) !void {
@@ -278,17 +281,18 @@ fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
     }
 }
 
-fn handleEnter(ctx: *InputContext) !void {
+fn handleEnter(ctx: *InputContext) !bool {
     const alloc = ctx.alloc;
     if (ctx.app.tool_confirmation.pending) {
         try ctx.app.resolveToolConfirmation(alloc, ctx.app.tool_confirmation.cursor);
     } else if (ctx.command_picker.active) {
-        var should_send = false;
+        var result: SlashResult = .none;
         if (ctx.command_picker.selectedCommand()) |cmd| {
-            should_send = try runSlashCommand(ctx, cmd.action);
+            result = try runSlashCommand(ctx, cmd.action);
         }
         ctx.command_picker.reset(alloc);
-        if (should_send and !ctx.app.is_loading) try spawnLlmRequest(ctx);
+        if (result == .quit) return true;
+        if (result == .send and !ctx.app.is_loading) try spawnLlmRequest(ctx);
     } else if (ctx.at_picker.active and ctx.at_picker.results.items.len > 0) {
         const picked_path = ctx.at_picker.results.items[ctx.at_picker.selected];
         try ctx.at_picker.addPicked(alloc, picked_path);
@@ -363,4 +367,5 @@ fn handleEnter(ctx: *InputContext) !void {
 
         try spawnLlmRequest(ctx);
     }
+    return false;
 }
