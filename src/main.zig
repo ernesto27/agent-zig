@@ -27,7 +27,6 @@ pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize)
     std.process.exit(1);
 }
 
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -48,9 +47,6 @@ pub fn main() !void {
 
     var provider_picker = provider_picker_mod.ProviderPicker.init();
     defer provider_picker.deinit(alloc);
-
-    var command_picker = command_picker_mod.CommandPicker.init();
-    defer command_picker.deinit(alloc);
 
     var show_exit: bool = false;
 
@@ -75,6 +71,9 @@ pub fn main() !void {
 
     var app = App.init(alloc, &llm_client);
     defer app.deinit();
+
+    var command_picker = command_picker_mod.CommandPicker.init(&app.skill_registry);
+    defer command_picker.deinit(alloc);
 
     var tty_buf: [4096]u8 = undefined;
     var tty = try vaxis.Tty.init(&tty_buf);
@@ -294,63 +293,7 @@ pub fn main() !void {
             auto_scroll = true;
         }
 
-        var row: u16 = 0;
-        const start = if (scroll_offset < total_lines) scroll_offset else 0;
-        for (rendered_lines[start..total_lines]) |line| {
-            if (row >= chat_h) break;
-            switch (line.entry) {
-                .plain => |p| {
-                    if (p.is_first) {
-                        const color: [3]u8 = if (std.mem.eql(u8, p.prefix, "AI: ")) .{ 0x60, 0xA0, 0xF0 } else .{ 0x60, 0xD0, 0x60 };
-                        _ = chat_win.printSegment(.{
-                            .text = p.prefix,
-                            .style = .{ .fg = .{ .rgb = color }, .bold = true },
-                        }, .{ .row_offset = row, .col_offset = 1 });
-                    }
-                    const prefix_len = @as(u16, @intCast(p.prefix.len));
-                    if (p.text.len > 0) {
-                        _ = chat_win.printSegment(.{ .text = p.text }, .{ .row_offset = row, .col_offset = 1 + prefix_len });
-                    }
-                },
-                .styled => |sline| {
-                    // Fill background for code blocks
-                    if (sline.block_bg) |bg| {
-                        var c: u16 = 1;
-                        while (c < chat_win.width -| 1) : (c += 1) {
-                            chat_win.writeCell(c, row, .{
-                                .char = .{ .grapheme = " ", .width = 1 },
-                                .style = .{ .bg = bg },
-                            });
-                        }
-                    }
-                    // Print styled spans
-                    var col: u16 = 1 + sline.indent;
-                    for (sline.spans) |span| {
-                        var style = span.style;
-                        if (sline.block_bg) |bg| style.bg = bg;
-                        const result = chat_win.printSegment(.{
-                            .text = span.text,
-                            .style = style,
-                        }, .{ .row_offset = row, .col_offset = col, .wrap = .none });
-                        col = result.col;
-                    }
-                },
-                .thinking => |th| {
-                    if (th.is_header) {
-                        _ = chat_win.printSegment(.{
-                            .text = "Thinking:",
-                            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0x80, 0x30 } }, .italic = true, .bold = true },
-                        }, .{ .row_offset = row, .col_offset = 2 });
-                    } else if (th.text.len > 0) {
-                        _ = chat_win.printSegment(.{
-                            .text = th.text,
-                            .style = .{ .fg = .{ .rgb = .{ 0x77, 0x77, 0x77 } } },
-                        }, .{ .row_offset = row, .col_offset = 2 });
-                    }
-                },
-            }
-            row += 1;
-        }
+        const start = ui.renderChatLines(chat_win, rendered_lines, scroll_offset);
 
         if (selection.bounds(rendered_lines)) |bounds| {
             var visible_row: usize = 0;

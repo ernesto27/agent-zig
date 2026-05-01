@@ -288,7 +288,16 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.command_picker.active) {
         var result: SlashResult = .none;
         if (ctx.command_picker.selectedCommand()) |cmd| {
-            result = try runSlashCommand(ctx, cmd.action);
+            if (cmd.action) |action| {
+                result = try runSlashCommand(ctx, action);
+            } else if (ctx.app.skill_registry.find(cmd.name) != null) {
+                if (!ctx.app.is_loading) {
+                    ctx.input.clearRetainingCapacity();
+                    ctx.cursor_pos = 0;
+                    try ctx.app.skillCMD(cmd.name);
+                    result = .send;
+                }
+            }
         }
         ctx.command_picker.reset(alloc);
         if (result == .quit) return true;

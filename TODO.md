@@ -7,10 +7,12 @@
 [] - show read file using
 [] - change font text
 [] - suuport skills protocol
-[] - exit command
+[] - show folder running agent,  branch
+[] - add copy text from input
+[x] - exit command
 [] - when accept all changes,  show files and dir created in preview
 [] - model name at right bottom is cut /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-26 21-20-28.png
-[] - ctrl+c prevent close app, ask
+[x] - ctrl+c prevent close app, ask
 [x] - show seconds, mins, in feedback, now only show seconds
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder

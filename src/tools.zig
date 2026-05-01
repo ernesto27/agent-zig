@@ -1,6 +1,7 @@
 const std = @import("std");
 const json_helpers = @import("json_helpers.zig");
 const message = @import("llm/message.zig");
+const skills = @import("skills.zig");
 const web = @import("tools/web.zig");
 
 const log = std.log.scoped(.tools);
@@ -8,6 +9,10 @@ const log = std.log.scoped(.tools);
 pub const ToolResult = struct {
     content: []const u8,
     is_error: bool = false,
+};
+
+pub const Context = struct {
+    skill_registry: ?*const skills.Registry = null,
 };
 
 pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
@@ -161,6 +166,36 @@ const web_extract_schema_json =
     \\}
 ;
 
+const skill_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "name": {
+    \\      "type": "string",
+    \\      "description": "Name of the skill to load"
+    \\    }
+    \\  },
+    \\  "required": ["name"]
+    \\}
+;
+
+const skill_resource_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "skill": {
+    \\      "type": "string",
+    \\      "description": "Name of the skill that owns the resource"
+    \\    },
+    \\    "path": {
+    \\      "type": "string",
+    \\      "description": "Relative path to a supporting file inside the skill directory"
+    \\    }
+    \\  },
+    \\  "required": ["skill", "path"]
+    \\}
+;
+
 const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
@@ -217,15 +252,31 @@ const tool_specs = [_]ToolSpec{
         .schema_json = web_extract_schema_json,
         .required = &.{"urls"},
     },
+    .{
+        .name = "skill",
+        .description = "Load a reusable skill by name. Use this when a skill description matches the user's request. The result is the full SKILL.md instructions for that skill.",
+        .schema_json = skill_schema_json,
+        .required = &.{"name"},
+    },
+    .{
+        .name = "skill_resource",
+        .description = "Read a supporting file from a previously loaded skill directory. Use this only for files referenced by the skill instructions.",
+        .schema_json = skill_resource_schema_json,
+        .required = &.{ "skill", "path" },
+    },
 };
 
-pub fn getDefinitions(allocator: std.mem.Allocator) ![]const message.ToolDefinition {
+pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const message.ToolDefinition {
     const defs = try allocator.alloc(message.ToolDefinition, tool_specs.len);
     for (tool_specs, 0..) |spec, i| {
         const schema = try std.json.parseFromSlice(std.json.Value, allocator, spec.schema_json, .{});
+        const description = if (std.mem.eql(u8, spec.name, "skill") and ctx.skill_registry != null) blk: {
+            const available = try ctx.skill_registry.?.buildAvailableSkillsMarkdown(allocator);
+            break :blk try std.mem.concat(allocator, u8, &.{ spec.description, "\n\n", available });
+        } else spec.description;
         defs[i] = .{
             .name = spec.name,
-            .description = spec.description,
+            .description = description,
             .input_schema = .{
                 .type = "object",
                 .properties = schema.value.object.get("properties") orelse .null,
@@ -237,7 +288,7 @@ pub fn getDefinitions(allocator: std.mem.Allocator) ![]const message.ToolDefinit
     return defs;
 }
 
-pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.json.Value) ToolResult {
+pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8, input: std.json.Value) ToolResult {
     if (std.mem.eql(u8, tool_name, "read_file")) {
         return readFile(allocator, input);
     }
@@ -264,11 +315,42 @@ pub fn execute(allocator: std.mem.Allocator, tool_name: []const u8, input: std.j
         const result = web.extract(allocator, input);
         return .{ .content = result.content, .is_error = result.is_error };
     }
+    if (std.mem.eql(u8, tool_name, "skill")) {
+        return loadSkill(allocator, ctx, input);
+    }
+    if (std.mem.eql(u8, tool_name, "skill_resource")) {
+        return loadSkillResource(allocator, ctx, input);
+    }
 
     return .{
         .content = "Unknown tool",
         .is_error = true,
     };
+}
+
+fn loadSkill(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
+    const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
+    const name = getStringField(input, "name") orelse return .{ .content = "Invalid input: expected { name: string }", .is_error = true };
+
+    const content = registry.readSkill(allocator, name) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Error loading skill '{s}': {}", .{ name, err }) catch
+            return .{ .content = "Error loading skill", .is_error = true };
+        return .{ .content = msg, .is_error = true };
+    };
+    return .{ .content = content };
+}
+
+fn loadSkillResource(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
+    const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
+    const name = getStringField(input, "skill") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
+    const path = getStringField(input, "path") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
+
+    const content = registry.readResource(allocator, name, path) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Error loading skill resource '{s}/{s}': {}", .{ name, path, err }) catch
+            return .{ .content = "Error loading skill resource", .is_error = true };
+        return .{ .content = msg, .is_error = true };
+    };
+    return .{ .content = content };
 }
 
 fn readFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {

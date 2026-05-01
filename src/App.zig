@@ -9,7 +9,7 @@ const plan_mod = @import("plan.zig");
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 
-pub const Role = enum { user, assistant };
+pub const Role = enum { user, assistant, notice };
 pub const Mode = enum { chat, plan };
 
 pub const Message = struct {
@@ -75,6 +75,7 @@ pub const App = struct {
     llm_history: std.ArrayList(agent.llm.Message),
     llm_client: *agent.llm.Client,
     pending_attachments: std.ArrayList([]u8),
+    skill_registry: agent.skills.Registry = .{},
     system_prompt: agent.system_prompt.SystemPrompt = .{},
     sessions: sessions.Sessions = .{},
     init_cmd: init_mod.Init = .{},
@@ -103,12 +104,25 @@ pub const App = struct {
         sess.init(alloc) catch |err| {
             log.err("failed to init sessions: {}", .{err});
         };
+        var skill_registry = agent.skills.Registry.init();
+        skill_registry.load(alloc) catch |err| {
+            log.err("failed to load skills: {}", .{err});
+        };
+        if (skill_registry.skills.items.len == 0) {
+            log.info("no skills loaded", .{});
+        } else {
+            log.info("loaded {d} skills", .{skill_registry.skills.items.len});
+            for (skill_registry.skills.items) |skill| {
+                log.info("skill: {s}", .{skill.name});
+            }
+        }
         return .{
             .alloc = alloc,
             .messages = .{},
             .llm_history = .{},
             .llm_client = client,
             .pending_attachments = .{},
+            .skill_registry = skill_registry,
             .system_prompt = sp,
             .sessions = sess,
             .plan = .{},
@@ -157,6 +171,34 @@ pub const App = struct {
         try self.messages.append(self.alloc, .{ .role = .user, .content = content });
     }
 
+    pub fn skillCMD(self: *Self, skill_name: []const u8) !void {
+        const prompt = try std.fmt.allocPrint(
+                self.alloc,
+                "Use the `skill` tool to load and apply the `{s}` skill for this conversation.",
+                .{skill_name},
+            );
+        errdefer self.alloc.free(prompt);
+
+        try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
+    }
+
+    fn appendSkillNotice(self: *Self, skill_name: []const u8) void {
+        const content = std.fmt.allocPrint(self.alloc, "→ Skill \"{s}\"", .{skill_name}) catch return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.messages.append(self.alloc, .{ .role = .notice, .content = content }) catch {
+            self.alloc.free(content);
+            return;
+        };
+        const assistant_placeholder = self.alloc.dupe(u8, "") catch return;
+        self.messages.append(self.alloc, .{ .role = .assistant, .content = assistant_placeholder }) catch {
+            self.alloc.free(assistant_placeholder);
+            return;
+        };
+        self.needs_redraw = true;
+    }
+
     pub fn deinit(self: *Self) void {
         self.freeMessages();
         self.messages.deinit(self.alloc);
@@ -166,6 +208,7 @@ pub const App = struct {
         self.glob_status.deinit(self.alloc);
         self.web_status.deinit(self.alloc);
         self.pending_attachments.deinit(self.alloc);
+        self.skill_registry.deinit(self.alloc);
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
     }
@@ -262,8 +305,7 @@ pub const App = struct {
         app.mutex.lock();
         defer app.mutex.unlock();
 
-        if (app.messages.items.len == 0) return;
-        const last = &app.messages.items[app.messages.items.len - 1];
+        const last = app.lastAssistantMessage() orelse return;
 
         // Grow the last message's content by appending the new chunk
         const new_content = std.mem.concat(app.alloc, u8, &.{ last.content, chunk }) catch return;
@@ -281,8 +323,7 @@ pub const App = struct {
         app.mutex.lock();
         defer app.mutex.unlock();
 
-        if (app.messages.items.len == 0) return;
-        const last = &app.messages.items[app.messages.items.len - 1];
+        const last = app.lastAssistantMessage() orelse return;
 
         if (last.thinking) |existing| {
             const new_thinking = std.mem.concat(app.alloc, u8, &.{ existing, chunk }) catch return;
@@ -294,6 +335,15 @@ pub const App = struct {
 
         app.needs_redraw = true;
         wakeLoop(ctx.loop);
+    }
+
+    fn lastAssistantMessage(self: *Self) ?*Message {
+        var idx = self.messages.items.len;
+        while (idx > 0) {
+            idx -= 1;
+            if (self.messages.items[idx].role == .assistant) return &self.messages.items[idx];
+        }
+        return null;
     }
 
     pub fn shouldCancel(ctx_ptr: *anyopaque) bool {
@@ -419,7 +469,8 @@ pub const App = struct {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
-        const tool_defs = agent.tools.getDefinitions(arena_alloc) catch &.{};
+        const tool_ctx = agent.tools.Context{ .skill_registry = &self.skill_registry };
+        const tool_defs = agent.tools.getDefinitions(arena_alloc, tool_ctx) catch &.{};
 
         const max_iterations = 10;
         var iteration: usize = 0;
@@ -671,8 +722,14 @@ pub const App = struct {
                     wakeLoop(loop);
                 }
 
-                const result = agent.tools.execute(alloc, tool_use.name, tool_use.input);
+                const result = agent.tools.execute(alloc, tool_ctx, tool_use.name, tool_use.input);
                 log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
+                if (!result.is_error and std.mem.eql(u8, tool_use.name, "skill")) {
+                    if (agent.tools.getStringField(tool_use.input, "name")) |skill_name| {
+                        self.appendSkillNotice(skill_name);
+                        wakeLoop(loop);
+                    }
+                }
                 tool_results[i] = .{
                     .tool_use_id = tool_use.id,
                     .content = result.content,

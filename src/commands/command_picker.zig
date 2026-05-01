@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const agent = @import("agent");
 
 pub const MAX_RESULTS = 10;
 
@@ -8,7 +9,7 @@ pub const CommandAction = enum { provider, model, clear, resume_session, init, e
 pub const Command = struct {
     name: []const u8,
     description: []const u8,
-    action: CommandAction,
+    action: ?CommandAction,
 };
 
 pub const commands = [_]Command{
@@ -23,11 +24,12 @@ pub const commands = [_]Command{
 pub const CommandPicker = struct {
     active: bool = false,
     query: std.ArrayList(u8) = .{},
-    results: std.ArrayList(*const Command) = .{},
+    results: std.ArrayList(Command) = .{},
     selected: usize = 0,
+    skill_registry: ?*const agent.skills.Registry = null,
 
-    pub fn init() CommandPicker {
-        return .{};
+    pub fn init(skill_registry: ?*const agent.skills.Registry) CommandPicker {
+        return .{ .skill_registry = skill_registry };
     }
 
     pub fn deinit(self: *CommandPicker, alloc: std.mem.Allocator) void {
@@ -55,7 +57,7 @@ pub const CommandPicker = struct {
         try self.refresh(alloc);
     }
 
-    pub fn selectedCommand(self: *const CommandPicker) ?*const Command {
+    pub fn selectedCommand(self: *const CommandPicker) ?Command {
         if (self.results.items.len == 0) return null;
         return self.results.items[self.selected];
     }
@@ -64,11 +66,27 @@ pub const CommandPicker = struct {
         self.results.clearRetainingCapacity();
         self.selected = 0;
 
-        for (&commands) |*command| {
-            if (self.query.items.len == 0 or std.ascii.indexOfIgnoreCase(command.name, self.query.items) != null) {
+        for (commands) |command| {
+            if (matchesQuery(command.name, self.query.items)) {
                 try self.results.append(alloc, command);
             }
         }
+
+        if (self.skill_registry) |registry| {
+            for (registry.skills.items) |skill| {
+                if (matchesQuery(skill.name, self.query.items)) {
+                    try self.results.append(alloc, .{
+                        .name = skill.name,
+                        .description = skill.description,
+                        .action = null,
+                    });
+                }
+            }
+        }
+    }
+
+    fn matchesQuery(name: []const u8, query: []const u8) bool {
+        return query.len == 0 or std.ascii.indexOfIgnoreCase(name, query) != null;
     }
 
     pub fn render(self: *const CommandPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
@@ -94,6 +112,11 @@ pub const CommandPicker = struct {
             }
         }
 
+        const prefix_width: u16 = 4;
+        const name_width = self.maxNameWidth(n);
+        const desc_col = prefix_width + name_width + 2;
+        const max_desc_width: usize = picker.width -| desc_col -| 1;
+
         for (self.results.items, 0..) |command, idx| {
             const row: u16 = @intCast(idx);
             if (row >= n) break;
@@ -110,14 +133,30 @@ pub const CommandPicker = struct {
             const prefix: []const u8 = if (is_selected) " > /" else "   /";
 
             const res = picker.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = row, .col_offset = 0 });
-            const name_res = picker.printSegment(.{ .text = command.name, .style = style }, .{ .row_offset = row, .col_offset = res.col });
+            _ = picker.printSegment(.{ .text = command.name, .style = style }, .{ .row_offset = row, .col_offset = res.col });
+            if (max_desc_width == 0 or command.description.len == 0) continue;
             _ = picker.printSegment(.{
-                .text = command.description,
+                .text = truncateDescription(command.description, max_desc_width),
                 .style = if (is_selected)
                     .{ .fg = .{ .rgb = .{ 0x2A, 0x15, 0x00 } }, .bg = bg }
                 else
                     .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bg = panel_bg },
-            }, .{ .row_offset = row, .col_offset = name_res.col + 2 });
+            }, .{ .row_offset = row, .col_offset = desc_col });
         }
+    }
+
+    fn maxNameWidth(self: *const CommandPicker, visible_count: u16) u16 {
+        var width: u16 = 0;
+        for (self.results.items, 0..) |command, idx| {
+            if (idx >= visible_count) break;
+            width = @max(width, @as(u16, @intCast(command.name.len + 1)));
+        }
+        return width;
+    }
+
+    fn truncateDescription(text: []const u8, max_width: usize) []const u8 {
+        if (text.len <= max_width) return text;
+        if (max_width <= 3) return text[0..max_width];
+        return text[0 .. max_width - 3];
     }
 };

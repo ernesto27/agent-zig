@@ -18,6 +18,10 @@ pub const ThinkingLine = struct {
     is_header: bool,
 };
 
+pub const NoticeLine = struct {
+    text: []const u8,
+};
+
 pub const StyledRenderedLine = struct {
     spans: []const agent.markdown.StyledSpan,
     indent: u16,
@@ -32,6 +36,7 @@ pub const RenderedLine = struct {
         plain: PlainRenderedLine,
         styled: StyledRenderedLine,
         thinking: ThinkingLine,
+        notice: NoticeLine,
     },
 };
 
@@ -107,7 +112,20 @@ pub fn buildRenderedLines(
     defer lines.deinit(allocator);
 
     for (app.messages.items) |*msg| {
-        if (msg.role == .assistant) {
+        if (msg.role == .notice) {
+            const notice_wrap_w: usize = if (chat_width > 4) chat_width - 4 else 10;
+            const wrapped = ui.wrapText(msg.content, notice_wrap_w, 512);
+            for (wrapped) |maybe_line| {
+                const line = maybe_line orelse break;
+                const rendered = try allocator.dupe(u8, line);
+                try lines.append(allocator, .{
+                    .text = rendered,
+                    .display_cols = displayWidth(rendered, width_method),
+                    .start_col = 2,
+                    .entry = .{ .notice = .{ .text = line } },
+                });
+            }
+        } else if (msg.role == .assistant) {
             const ai_label = try buildPlainLineText(allocator, "AI: ", "", true);
             try lines.append(allocator, .{
                 .text = ai_label,

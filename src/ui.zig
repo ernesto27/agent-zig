@@ -303,6 +303,76 @@ pub fn spinnerThread(app: *App, loop: *EventLoop, spinner_state: *SpinnerState, 
     }
 }
 
+pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_offset: usize) usize {
+    const chat_h = chat_win.height;
+    const total_lines = rendered_lines.len;
+    const start = if (scroll_offset < total_lines) scroll_offset else 0;
+
+    var row: u16 = 0;
+    for (rendered_lines[start..total_lines]) |line| {
+        if (row >= chat_h) break;
+        switch (line.entry) {
+            .plain => |p| {
+                if (p.is_first) {
+                    const color: [3]u8 = if (std.mem.eql(u8, p.prefix, "AI: ")) .{ 0x60, 0xA0, 0xF0 } else .{ 0x60, 0xD0, 0x60 };
+                    _ = chat_win.printSegment(.{
+                        .text = p.prefix,
+                        .style = .{ .fg = .{ .rgb = color }, .bold = true },
+                    }, .{ .row_offset = row, .col_offset = 1 });
+                }
+                const prefix_len = @as(u16, @intCast(p.prefix.len));
+                if (p.text.len > 0) {
+                    _ = chat_win.printSegment(.{ .text = p.text }, .{ .row_offset = row, .col_offset = 1 + prefix_len });
+                }
+            },
+            .styled => |sline| {
+                if (sline.block_bg) |bg| {
+                    var c: u16 = 1;
+                    while (c < chat_win.width -| 1) : (c += 1) {
+                        chat_win.writeCell(c, row, .{
+                            .char = .{ .grapheme = " ", .width = 1 },
+                            .style = .{ .bg = bg },
+                        });
+                    }
+                }
+
+                var col: u16 = 1 + sline.indent;
+                for (sline.spans) |span| {
+                    var style = span.style;
+                    if (sline.block_bg) |bg| style.bg = bg;
+                    const result = chat_win.printSegment(.{
+                        .text = span.text,
+                        .style = style,
+                    }, .{ .row_offset = row, .col_offset = col, .wrap = .none });
+                    col = result.col;
+                }
+            },
+            .thinking => |th| {
+                if (th.is_header) {
+                    _ = chat_win.printSegment(.{
+                        .text = "Thinking:",
+                        .style = .{ .fg = .{ .rgb = .{ 0xCC, 0x80, 0x30 } }, .italic = true, .bold = true },
+                    }, .{ .row_offset = row, .col_offset = 2 });
+                } else if (th.text.len > 0) {
+                    _ = chat_win.printSegment(.{
+                        .text = th.text,
+                        .style = .{ .fg = .{ .rgb = .{ 0x77, 0x77, 0x77 } } },
+                    }, .{ .row_offset = row, .col_offset = 2 });
+                }
+            },
+            .notice => |notice| {
+                _ = chat_win.printSegment(.{
+                    .text = notice.text,
+                    .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+                }, .{ .row_offset = row, .col_offset = line.start_col });
+            },
+        }
+        row += 1;
+    }
+
+    return start;
+}
+
 pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, preview_y: u16, preview_h: u16, app: *const App, preview_scroll: usize) void {
     const show_grep_panel = !app.tool_confirmation.pending and app.grep_status.pattern.len > 0;
     const show_glob_panel = !app.tool_confirmation.pending and app.glob_status.pattern.len > 0;
