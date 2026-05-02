@@ -303,6 +303,18 @@ pub fn spinnerThread(app: *App, loop: *EventLoop, spinner_state: *SpinnerState, 
     }
 }
 
+pub fn renderHeader(win: vaxis.Window, cwd: []const u8) void {
+    const title = " Zigent - AI Coding Agent ";
+    _ = win.printSegment(.{
+        .text = title,
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+    }, .{ .row_offset = 0, .col_offset = 0 });
+    _ = win.printSegment(.{
+        .text = cwd,
+        .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+    }, .{ .row_offset = 0, .col_offset = @intCast(title.len) });
+}
+
 pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_offset: usize) usize {
     const chat_h = chat_win.height;
     const total_lines = rendered_lines.len;

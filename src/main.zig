@@ -263,10 +263,9 @@ pub fn main() !void {
         defer frame_arena.deinit();
 
         // Header
-        _ = win.printSegment(.{
-            .text = " Zigent - AI Coding Agent ",
-            .style = .{ .bg = .{ .rgb = .{ 0x30, 0x80, 0xD0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-        }, .{ .row_offset = 0, .col_offset = 0 });
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd = agent.utils.getCwdPretty(&cwd_buf) catch "";
+        ui.renderHeader(win, cwd);
 
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
         const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
