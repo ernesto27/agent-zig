@@ -86,6 +86,21 @@ pub const Registry = struct {
         return readFile(allocator, path, max_resource_bytes);
     }
 
+    pub fn resolveScriptPath(self: *const Registry, allocator: std.mem.Allocator, name: []const u8, script_path: []const u8) ![]u8 {
+        const skill = self.find(name) orelse return error.SkillNotFound;
+        try validateResourcePath(script_path);
+
+        const normalized = if (std.mem.startsWith(u8, script_path, "scripts/"))
+            script_path
+        else if (std.mem.indexOfScalar(u8, script_path, '/') == null)
+            try std.mem.concat(allocator, u8, &.{ "scripts/", script_path })
+        else
+            return error.InvalidScriptPath;
+        defer if (normalized.ptr != script_path.ptr) allocator.free(normalized);
+
+        return std.fs.path.join(allocator, &.{ skill.dir_path, normalized });
+    }
+
     fn loadOne(self: *Registry, allocator: std.mem.Allocator, dir_name: []const u8) !void {
         if (!isValidName(dir_name)) return error.InvalidSkillName;
 

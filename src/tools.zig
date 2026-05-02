@@ -196,6 +196,23 @@ const skill_resource_schema_json =
     \\}
 ;
 
+const skill_script_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "skill": {
+    \\      "type": "string",
+    \\      "description": "Name of the skill that owns the script"
+    \\    },
+    \\    "path": {
+    \\      "type": "string",
+    \\      "description": "Relative path to a script inside the skill's scripts/ directory"
+    \\    }
+    \\  },
+    \\  "required": ["skill", "path"]
+    \\}
+;
+
 const ToolSpec = struct {
     name: []const u8,
     description: []const u8,
@@ -254,14 +271,20 @@ const tool_specs = [_]ToolSpec{
     },
     .{
         .name = "skill",
-        .description = "Load a reusable skill by name. Use this when a skill description matches the user's request. The result is the full SKILL.md instructions for that skill.",
+        .description = "Load a reusable skill by name. Use this when a skill description matches the user's request. The result is the full SKILL.md instructions for that skill, which may reference bundled scripts or other supporting files.",
         .schema_json = skill_schema_json,
         .required = &.{"name"},
     },
     .{
         .name = "skill_resource",
-        .description = "Read a supporting file from a previously loaded skill directory. Use this only for files referenced by the skill instructions.",
+        .description = "Read a non-script supporting file from a previously loaded skill directory. Use this only for files referenced by the skill instructions.",
         .schema_json = skill_resource_schema_json,
+        .required = &.{ "skill", "path" },
+    },
+    .{
+        .name = "skill_script",
+        .description = "Resolve the full filesystem path to a bundled skill script under scripts/. Use this before running a script referenced by a skill.",
+        .schema_json = skill_script_schema_json,
         .required = &.{ "skill", "path" },
     },
 };
@@ -321,6 +344,9 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
     if (std.mem.eql(u8, tool_name, "skill_resource")) {
         return loadSkillResource(allocator, ctx, input);
     }
+    if (std.mem.eql(u8, tool_name, "skill_script")) {
+        return resolveSkillScript(allocator, ctx, input);
+    }
 
     return .{
         .content = "Unknown tool",
@@ -351,6 +377,19 @@ fn loadSkillResource(allocator: std.mem.Allocator, ctx: Context, input: std.json
         return .{ .content = msg, .is_error = true };
     };
     return .{ .content = content };
+}
+
+fn resolveSkillScript(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
+    const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
+    const name = getStringField(input, "skill") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
+    const path = getStringField(input, "path") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
+
+    const resolved = registry.resolveScriptPath(allocator, name, path) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "Error resolving skill script '{s}/{s}': {}", .{ name, path, err }) catch
+            return .{ .content = "Error resolving skill script", .is_error = true };
+        return .{ .content = msg, .is_error = true };
+    };
+    return .{ .content = resolved };
 }
 
 fn readFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {

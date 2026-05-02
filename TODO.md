@@ -3,6 +3,8 @@
 [x] - show thinking
 [x] - show code before accept- deny
 [x] - tool for search internet
+[] - add option to run command bash
+[] - add option to add folder to current context
 [] - make tool calls in parallet internet
 [] - show read file using
 [] - change font text

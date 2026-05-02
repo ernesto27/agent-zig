@@ -173,10 +173,10 @@ pub const App = struct {
 
     pub fn skillCMD(self: *Self, skill_name: []const u8) !void {
         const prompt = try std.fmt.allocPrint(
-                self.alloc,
-                "Use the `skill` tool to load and apply the `{s}` skill for this conversation.",
-                .{skill_name},
-            );
+            self.alloc,
+            "Use the `skill` tool to load and apply the `{s}` skill for this conversation.",
+            .{skill_name},
+        );
         errdefer self.alloc.free(prompt);
 
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
@@ -194,6 +194,18 @@ pub const App = struct {
         const assistant_placeholder = self.alloc.dupe(u8, "") catch return;
         self.messages.append(self.alloc, .{ .role = .assistant, .content = assistant_placeholder }) catch {
             self.alloc.free(assistant_placeholder);
+            return;
+        };
+        self.needs_redraw = true;
+    }
+
+    fn appendSkillScriptNotice(self: *Self, skill_name: []const u8, script_path: []const u8) void {
+        const content = std.fmt.allocPrint(self.alloc, "→ Skill script \"{s}/{s}\"", .{ skill_name, script_path }) catch return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.messages.append(self.alloc, .{ .role = .notice, .content = content }) catch {
+            self.alloc.free(content);
             return;
         };
         self.needs_redraw = true;
@@ -728,6 +740,14 @@ pub const App = struct {
                     if (agent.tools.getStringField(tool_use.input, "name")) |skill_name| {
                         self.appendSkillNotice(skill_name);
                         wakeLoop(loop);
+                    }
+                }
+                if (!result.is_error and std.mem.eql(u8, tool_use.name, "skill_script")) {
+                    if (agent.tools.getStringField(tool_use.input, "skill")) |skill_name| {
+                        if (agent.tools.getStringField(tool_use.input, "path")) |script_path| {
+                            self.appendSkillScriptNotice(skill_name, script_path);
+                            wakeLoop(loop);
+                        }
                     }
                 }
                 tool_results[i] = .{

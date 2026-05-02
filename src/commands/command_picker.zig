@@ -156,7 +156,15 @@ pub const CommandPicker = struct {
 
     fn truncateDescription(text: []const u8, max_width: usize) []const u8 {
         if (text.len <= max_width) return text;
-        if (max_width <= 3) return text[0..max_width];
-        return text[0 .. max_width - 3];
+
+        var end = if (max_width <= 3) max_width else max_width - 3;
+        while (end > 0 and isUtf8ContinuationByte(text[end])) {
+            end -= 1;
+        }
+        return text[0..end];
+    }
+
+    fn isUtf8ContinuationByte(byte: u8) bool {
+        return (byte & 0b1100_0000) == 0b1000_0000;
     }
 };
