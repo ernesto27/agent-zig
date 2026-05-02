@@ -4,13 +4,13 @@ const agent = @import("agent");
 const context_usage_mod = @import("context_usage.zig");
 const sessions = @import("sessions.zig");
 const init_mod = @import("commands/init.zig");
-const plan_mod = @import("plan.zig");
+const mode_mod = @import("mode.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 
 pub const Role = enum { user, assistant, notice };
-pub const Mode = enum { chat, plan };
+pub const Mode = mode_mod.Mode;
 
 pub const Message = struct {
     role: Role,
@@ -89,8 +89,7 @@ pub const App = struct {
     web_status: WebStatus = .{},
     cancel_requested: bool = false,
     context_usage: context_usage_mod.contextUsage = .{},
-    mode: Mode = .chat,
-    plan: plan_mod.Plan = .{},
+    mode: Mode = .{ .build = .{} },
 
     const Self = @This();
     const log = std.log.scoped(.app);
@@ -125,7 +124,6 @@ pub const App = struct {
             .skill_registry = skill_registry,
             .system_prompt = sp,
             .sessions = sess,
-            .plan = .{},
         };
     }
 
@@ -418,10 +416,7 @@ pub const App = struct {
     }
 
     pub fn toggleMode(self: *Self) void {
-        self.mode = switch (self.mode) {
-            .chat => .plan,
-            .plan => .chat,
-        };
+        self.mode = self.mode.toggle();
         self.needs_redraw = true;
     }
 
@@ -507,7 +502,7 @@ pub const App = struct {
                 }
             }
 
-            const system = self.plan.buildSystemPrompt(alloc, self.mode == .plan, self.system_prompt.content);
+            const system = self.mode.buildSystemPrompt(alloc, self.system_prompt.content);
             defer if (system) |prompt| alloc.free(prompt);
             const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, system, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
                 log.err("sendMessageStreaming failed: {}", .{err});
@@ -622,17 +617,15 @@ pub const App = struct {
             for (tool_uses.items, 0..) |tool_use, i| {
                 log.info("executing tool: {s}", .{tool_use.name});
 
-                if (self.mode == .plan) {
-                    const policy = self.plan.isToolAllowed(tool_use.name, tool_use.input);
-                    if (!policy.ok) {
-                        tool_results[i] = .{
-                            .tool_use_id = tool_use.id,
-                            .content = policy.reason,
-                            .is_error = true,
-                        };
-                        any_denied = true;
-                        continue;
-                    }
+                const policy = self.mode.isToolAllowed(tool_use.name, tool_use.input);
+                if (!policy.ok) {
+                    tool_results[i] = .{
+                        .tool_use_id = tool_use.id,
+                        .content = policy.reason,
+                        .is_error = true,
+                    };
+                    any_denied = true;
+                    continue;
                 }
 
                 if (self.tool_confirmation.cursor != .accept_all) {
