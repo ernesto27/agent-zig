@@ -2,6 +2,24 @@
 
 Terminal-based AI coding agent written in Zig.
 
+## Features
+
+- **Multi-provider LLM**: Anthropic (Claude Opus/Sonnet/Haiku) and OpenAI (GPT-4o, o3, o4-mini)
+- **Streaming responses**: SSE streaming with real-time token display
+- **Extended thinking**: Visible reasoning for thinking-capable models
+- **Tool system** with approve/deny/accept-all confirmation UI:
+  - `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`
+  - `web_search`, `web_extract` (Tavily — requires API key)
+- **Skills**: Load custom agent skills from `.agents/skills/`
+- **Modes**: `build` and `plan` modes with tailored system prompts
+- **Slash commands**: `/provider`, `/model`, `/clear`, `/resume`, `/init`, `/exit` + loaded skills
+- **@ file picker**: Attach files inline to messages
+- **Session management**: Save and resume past conversations
+- **Markdown rendering**: Styled output in the chat area
+- **Context usage**: Token count display
+- **Cancellation**: Esc cancels in-flight requests; Ctrl+C with exit confirmation
+- **Logging**: File-based logger (not stderr, avoids TUI pollution)
+
 ## Build
 
 ```bash

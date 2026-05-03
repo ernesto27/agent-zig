@@ -145,6 +145,12 @@ fn handleEscape(ctx: *InputContext) !void {
         ctx.provider_picker.reset(ctx.alloc);
     } else if (ctx.app.sessions.active) {
         ctx.app.sessions.reset();
+    } else switch (ctx.app.mode) {
+        .shell => {
+            ctx.app.mode = .{ .build = .{} };
+            ctx.app.needs_redraw = true;
+        },
+        else => {},
     }
 }
 
@@ -277,7 +283,16 @@ fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
             try ctx.at_picker.query.appendSlice(alloc, after_at);
             try ctx.at_picker.refresh(alloc);
         }
-        if (txt.len == 1) try ctx.command_picker.updateFromInput(alloc, ctx.input.items);
+        if (txt.len == 1) {
+            if (ctx.input.items.len > 0 and ctx.input.items[0] == '!') {
+                _ = ctx.input.orderedRemove(0);
+                ctx.cursor_pos -|= 1;
+                ctx.app.mode.setShell();
+                ctx.app.needs_redraw = true;
+            } else {
+                try ctx.command_picker.updateFromInput(alloc, ctx.input.items);
+            }
+        }
     }
 }
 
@@ -358,23 +373,56 @@ fn handleEnter(ctx: *InputContext) !bool {
         }
         ctx.app.sessions.reset();
     } else if (ctx.input.items.len > 0 and !ctx.app.is_loading) {
-        ctx.app.mutex.lock();
+        switch (ctx.app.mode) {
+            .shell => |shell| {
+                const raw_input = ctx.input.items;
+                const shell_result = try shell.runCommand(alloc, raw_input);
+                errdefer alloc.free(shell_result.command);
+                var assistant_content = shell_result.result.content;
+                errdefer alloc.free(assistant_content);
+                const user_input = try alloc.dupe(u8, raw_input);
+                errdefer alloc.free(user_input);
 
-        const picked = ctx.at_picker.takePicked(alloc, ctx.input.items);
-        defer alloc.free(picked);
-        for (picked) |p| ctx.app.pending_attachments.append(alloc, p) catch alloc.free(p);
+                ctx.app.mutex.lock();
+                errdefer ctx.app.mutex.unlock();
+                try ctx.app.messages.append(alloc, .{ .role = .user, .content = user_input });
+                try ctx.app.messages.append(alloc, .{
+                    .role = .assistant,
+                    .content = assistant_content,
+                    .is_error = shell_result.result.is_error,
+                });
+                ctx.app.mutex.unlock();
 
-        const user_text = try alloc.dupe(u8, ctx.input.items);
-        try ctx.app.messages.append(alloc, .{ .role = .user, .content = user_text });
-        ctx.app.mutex.unlock();
+                assistant_content = &.{};
 
-        try ctx.history.append(alloc, try alloc.dupe(u8, ctx.input.items));
-        ctx.history_idx = null;
-        ctx.draft.clearRetainingCapacity();
-        ctx.input.clearRetainingCapacity();
-        ctx.cursor_pos = 0;
+                try ctx.history.append(alloc, try alloc.dupe(u8, ctx.input.items));
+                alloc.free(shell_result.command);
+                ctx.history_idx = null;
+                ctx.draft.clearRetainingCapacity();
+                ctx.input.clearRetainingCapacity();
+                ctx.cursor_pos = 0;
+                ctx.app.needs_redraw = true;
+            },
+            else => {
+                ctx.app.mutex.lock();
 
-        try spawnLlmRequest(ctx);
+                const picked = ctx.at_picker.takePicked(alloc, ctx.input.items);
+                defer alloc.free(picked);
+                for (picked) |p| ctx.app.pending_attachments.append(alloc, p) catch alloc.free(p);
+
+                const user_text = try alloc.dupe(u8, ctx.input.items);
+                try ctx.app.messages.append(alloc, .{ .role = .user, .content = user_text });
+                ctx.app.mutex.unlock();
+
+                try ctx.history.append(alloc, try alloc.dupe(u8, ctx.input.items));
+                ctx.history_idx = null;
+                ctx.draft.clearRetainingCapacity();
+                ctx.input.clearRetainingCapacity();
+                ctx.cursor_pos = 0;
+
+                try spawnLlmRequest(ctx);
+            },
+        }
     }
     return false;
 }

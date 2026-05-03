@@ -190,7 +190,12 @@ pub fn buildInputLayout(
     screen_width: u16,
     cursor_pos: usize,
 ) InputLayout {
-    const prompt = if (app.is_loading) loading(app.getElapsedSeconds() orelse 0) else "> ";
+    const prompt = if (app.is_loading)
+        loading(app.getElapsedSeconds() orelse 0)
+    else switch (app.mode) {
+        .shell => "! ",
+        else => "> ",
+    };
     const fallback: InputView = .{
         .lines = &.{},
         .cursor_row = 0,
@@ -541,7 +546,6 @@ pub fn renderStatus(
     clipboard_status: ?[]const u8,
     show_exit: bool,
 ) void {
-    const status_bg: vaxis.Color = .{ .rgb = .{ 0x40, 0x40, 0x40 } };
     var status_right_reserved: u16 = 0;
     const mode_label = app.mode.label();
     const version_text_len: u16 = @intCast(app_version.len + 2);
@@ -551,20 +555,20 @@ pub fn renderStatus(
 
     _ = win.printSegment(.{
         .text = mode_label,
-        .style = .{ .bg = .{ .rgb = .{ 0x30, 0x30, 0x30 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = 0 });
 
     var res = win.printSegment(.{
         .text = " ",
-        .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = @as(u16, @intCast(mode_label.len + 1)) });
     res = win.printSegment(.{
         .text = model,
-        .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = res.col });
     res = win.printSegment(.{
         .text = " ",
-        .style = .{ .bg = .{ .rgb = .{ 0x20, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = res.col });
 
     if (app.tool_confirmation.cursor == .accept_all) {
@@ -573,7 +577,7 @@ pub fn renderStatus(
         status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(badge.len)));
         _ = win.printSegment(.{
             .text = badge,
-            .style = .{ .bg = .{ .rgb = .{ 0x20, 0x80, 0x40 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = badge_col });
     }
 
@@ -584,73 +588,73 @@ pub fn renderStatus(
         status_right_reserved = @max(status_right_reserved, version_text_len + effort_text_len);
         var effort_res = win.printSegment(.{
             .text = " ",
-            .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_col });
         effort_res = win.printSegment(.{
             .text = effort_label,
-            .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_res.col });
         _ = win.printSegment(.{
             .text = " ",
-            .style = .{ .bg = .{ .rgb = .{ 0x60, 0x30, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_res.col });
     }
 
     if (app.tool_status) |tool| {
         res = win.printSegment(.{
             .text = " TOOL: ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = tool,
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = " ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     } else {
         res = win.printSegment(.{
             .text = if (app.is_loading) " THINKING " else " READY ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
 
     if (clipboard_status) |status| {
         res = win.printSegment(.{
             .text = status,
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = "  ctrl+q: quit",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     } else {
         res = win.printSegment(.{
             .text = " ctrl+q: quit",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
     if (show_exit) {
         res = win.printSegment(.{
             .text = "  ctrl+c again to exit ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0x88 } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0x88 } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
-    app.context_usage.render(win, res.col, status_row, status_bg);
+    app.context_usage.render(win, res.col, status_row, .default);
 
     if (version_col > res.col and version_col >= status_right_reserved) {
         var version_res = win.printSegment(.{
             .text = " ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
         }, .{ .row_offset = status_row, .col_offset = version_col });
         version_res = win.printSegment(.{
             .text = app_version,
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
         _ = win.printSegment(.{
             .text = " ",
-            .style = .{ .bg = status_bg, .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
     }
 }

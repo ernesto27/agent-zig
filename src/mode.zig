@@ -1,6 +1,7 @@
 const std = @import("std");
 const BuildMode = @import("modes/build.zig").BuildMode;
 const PlanMode = @import("modes/plan.zig").PlanMode;
+const ShellMode = @import("modes/shell.zig").ShellMode;
 
 pub const ToolPolicy = struct {
     ok: bool,
@@ -10,6 +11,7 @@ pub const ToolPolicy = struct {
 pub const Mode = union(enum) {
     build: BuildMode,
     plan: PlanMode,
+    shell: ShellMode,
 
     pub fn label(self: Mode) []const u8 {
         return switch (self) {
@@ -33,6 +35,11 @@ pub const Mode = union(enum) {
         return switch (self) {
             .build => .{ .plan = .{} },
             .plan => .{ .build = .{} },
+            .shell => .{ .build = .{} },
         };
+    }
+
+    pub fn setShell(self: *Mode) void {
+        self.* = .{ .shell = .{} };
     }
 };
