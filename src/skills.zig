@@ -10,11 +10,15 @@ const max_resource_bytes = 1024 * 1024;
 pub const Skill = struct {
     name: []const u8,
     description: []const u8,
+    license: ?[]const u8,
+    metadata: ?[]const u8,
     dir_path: []const u8,
 
     fn deinit(self: *Skill, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.description);
+        if (self.license) |v| allocator.free(v);
+        if (self.metadata) |v| allocator.free(v);
         allocator.free(self.dir_path);
     }
 };
@@ -65,7 +69,11 @@ pub const Registry = struct {
 
         try out.appendSlice(allocator, "Available skills:\n\n");
         for (self.skills.items) |skill| {
+            if (skill.license) |lic| {
+            try out.writer(allocator).print("- `{s}`: {s} (license: {s})\n", .{ skill.name, skill.description, lic });
+        } else {
             try out.writer(allocator).print("- `{s}`: {s}\n", .{ skill.name, skill.description });
+        }
         }
 
         return out.toOwnedSlice(allocator);
@@ -123,9 +131,16 @@ pub const Registry = struct {
         if (!isValidName(parsed.name)) return error.InvalidSkillName;
         if (parsed.description.len == 0 or parsed.description.len > 1024) return error.InvalidSkillDescription;
 
+        errdefer {
+            if (parsed.license) |v| allocator.free(v);
+            if (parsed.metadata) |v| allocator.free(v);
+        }
+
         try self.skills.append(allocator, .{
             .name = parsed.name,
             .description = parsed.description,
+            .license = parsed.license,
+            .metadata = parsed.metadata,
             .dir_path = dir_path,
         });
     }
@@ -134,6 +149,8 @@ pub const Registry = struct {
 const ParsedFrontmatter = struct {
     name: []u8,
     description: []u8,
+    license: ?[]u8 = null,
+    metadata: ?[]u8 = null,
 };
 
 fn parseFrontmatter(allocator: std.mem.Allocator, content: []const u8) !ParsedFrontmatter {
@@ -150,6 +167,8 @@ fn parseFrontmatter(allocator: std.mem.Allocator, content: []const u8) !ParsedFr
 
     var name: ?[]u8 = null;
     var description: ?[]u8 = null;
+    var license: ?[]u8 = null;
+    var metadata: ?[]u8 = null;
 
     var lines = std.mem.splitScalar(u8, frontmatter, '\n');
     while (lines.next()) |raw_line| {
@@ -171,21 +190,45 @@ fn parseFrontmatter(allocator: std.mem.Allocator, content: []const u8) !ParsedFr
             } else {
                 description = try dupScalarValue(allocator, value);
             }
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, trimmed, "license:")) {
+            if (license) |old| allocator.free(old);
+            license = try dupScalarValue(allocator, trimmed["license:".len..]);
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, trimmed, "metadata:")) {
+            if (metadata) |old| allocator.free(old);
+            const value = std.mem.trim(u8, trimmed["metadata:".len..], " \t");
+            if (value.len == 0) {
+                metadata = try collectRawBlock(allocator, &lines);
+            } else {
+                metadata = try allocator.dupe(u8, value);
+            }
+            continue;
         }
     }
 
     if (name == null) {
-        if (description) |value| allocator.free(value);
+        if (description) |v| allocator.free(v);
+        if (license) |v| allocator.free(v);
+        if (metadata) |v| allocator.free(v);
         return error.MissingSkillName;
     }
     if (description == null) {
         allocator.free(name.?);
+        if (license) |v| allocator.free(v);
+        if (metadata) |v| allocator.free(v);
         return error.MissingSkillDescription;
     }
 
     return .{
         .name = name.?,
         .description = description.?,
+        .license = license,
+        .metadata = metadata,
     };
 }
 
@@ -215,6 +258,18 @@ fn collectBlockScalar(allocator: std.mem.Allocator, lines: *std.mem.SplitIterato
         try out.appendSlice(allocator, trimmed);
     }
 
+    return out.toOwnedSlice(allocator);
+}
+
+fn collectRawBlock(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, .scalar)) ![]u8 {
+    var out = std.ArrayList(u8){};
+    errdefer out.deinit(allocator);
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trimRight(u8, raw_line, "\r");
+        if (line.len > 0 and line[0] != ' ' and line[0] != '\t') break;
+        if (out.items.len > 0) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, std.mem.trimRight(u8, line, " \t"));
+    }
     return out.toOwnedSlice(allocator);
 }
 
