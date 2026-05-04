@@ -20,15 +20,11 @@ pub const ShellMode = struct {
     }
 
     pub fn runCommand(_: ShellMode, alloc: std.mem.Allocator, raw_input: []const u8) !CommandResult {
-        var tool_input: std.json.Value = .{ .object = std.json.ObjectMap.init(alloc) };
-        defer tool_input.object.deinit();
-
         const shell_command = if (raw_input.len > 0 and raw_input[0] == '!') raw_input[1..] else raw_input;
         const command = try alloc.dupe(u8, shell_command);
         errdefer alloc.free(command);
-        try tool_input.object.put("command", .{ .string = command });
 
-        const result = agent.tools.execute(alloc, .{}, "bash", tool_input);
+        const result = try agent.tools.runBashCommand(alloc, command);
         return .{ .command = command, .result = result };
     }
 

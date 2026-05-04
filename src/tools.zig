@@ -354,6 +354,15 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
     };
 }
 
+pub fn runBashCommand(allocator: std.mem.Allocator, command: []const u8) !ToolResult {
+    var tool_input: std.json.Value = .{ .object = std.json.ObjectMap.init(allocator) };
+    defer tool_input.object.deinit();
+
+    try tool_input.object.put("command", .{ .string = command });
+
+    return execute(allocator, .{}, "bash", tool_input);
+}
+
 fn loadSkill(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
     const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
     const name = getStringField(input, "name") orelse return .{ .content = "Invalid input: expected { name: string }", .is_error = true };

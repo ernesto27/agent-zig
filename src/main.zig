@@ -265,7 +265,14 @@ pub fn main() !void {
         // Header
         var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
         const cwd = agent.utils.getCwdPretty(&cwd_buf) catch "";
-        ui.renderHeader(win, cwd);
+        var branch_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const currentBranch = agent.utils.getCurrentGitBranch(&branch_buf) catch "";
+        var header_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+        const header = if (currentBranch.len > 0)
+            std.fmt.bufPrint(&header_buf, "{s}:{s}", .{ cwd, currentBranch }) catch cwd
+        else
+            cwd;
+        ui.renderHeader(win, header);
 
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
         const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);

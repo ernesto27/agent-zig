@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 pub fn getCwdPretty(buf: []u8) ![]u8 {
     var raw: [std.fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&raw);
@@ -15,6 +14,19 @@ pub fn getCwdPretty(buf: []u8) ![]u8 {
         return buf[0..cwd.len];
     }
     return std.fmt.bufPrint(buf, "~{s}", .{cwd[home.len..]}) catch buf[0..0];
+}
+
+pub fn getCurrentGitBranch(buf: []u8) ![]const u8 {
+    var raw: [std.fs.max_path_bytes]u8 = undefined;
+    const head = try std.fs.cwd().readFile(".git/HEAD", &raw);
+    const trimmed = std.mem.trimRight(u8, head, "\r\n");
+    const prefix = "ref: refs/heads/";
+
+    if (!std.mem.startsWith(u8, trimmed, prefix)) return buf[0..0];
+
+    const branch = trimmed[prefix.len..];
+    @memcpy(buf[0..branch.len], branch);
+    return buf[0..branch.len];
 }
 
 test "getCwdPretty does not replace non-home prefix" {
