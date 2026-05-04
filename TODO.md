@@ -3,6 +3,8 @@
 [x] - show thinking
 [x] - show code before accept- deny
 [x] - tool for search internet
+[] - add provider deep seek
+[] - add provider google
 [] - connect to provider github copilot
 [] - save command result in history to resume
 [x] - add option to run command bash

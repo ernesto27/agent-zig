@@ -89,7 +89,11 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
 }
 
 pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
-    if (text.len > 0) {
+    if (text.len == 0) return;
+
+    if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
+        try ctx.provider_picker.key_input.appendSlice(ctx.alloc, text);
+    } else {
         try ctx.input.insertSlice(ctx.alloc, ctx.cursor_pos, text);
         ctx.cursor_pos += text.len;
     }
@@ -98,6 +102,19 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 // ── private helpers ───────────────────────────────────────────────────────────
 
 fn spawnLlmRequest(ctx: *InputContext) !void {
+    if (ctx.app.llm_client.config.api_key.len == 0) {
+        ctx.app.mutex.lock();
+        defer ctx.app.mutex.unlock();
+
+        try ctx.app.messages.append(ctx.alloc, .{
+            .role = .assistant,
+            .content = try std.fmt.allocPrint(ctx.alloc, "Missing API key for {s}. Use /provider to set it.", .{ctx.app.llm_client.config.provider_name}),
+            .is_error = true,
+        });
+        ctx.app.needs_redraw = true;
+        return;
+    }
+
     ctx.app.mutex.lock();
     try ctx.app.messages.append(ctx.alloc, .{ .role = .assistant, .content = try ctx.alloc.dupe(u8, "") });
     ctx.app.setLoading(true);

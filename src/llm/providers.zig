@@ -38,6 +38,13 @@ pub const providers = [_]Provider{
             .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true, .max_context = 128_000 },
         },
     },
+    .{
+        .name = "DeepSeek",
+        .models = &[_]Model{
+            .{ .id = "deepseek-v4-flash", .display = "DeepSeek V4 Flash", .supports_thinking = true, .max_context = 1_000_000 },
+            .{ .id = "deepseek-v4-pro", .display = "DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_000_000 },
+        },
+    },
 };
 
 pub fn findModel(id: []const u8) ?FindResult {

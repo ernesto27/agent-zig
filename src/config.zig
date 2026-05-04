@@ -2,19 +2,21 @@ const std = @import("std");
 const log = std.log.scoped(.config);
 
 pub const ProviderConfig = struct {
-    apiKey: []const u8,
-    baseUrl: []const u8,
-    model: []const u8,
+    apiKey: []const u8 = "",
+    baseUrl: []const u8 = "",
+    model: []const u8 = "",
 };
 
 pub const Config = struct {
-    selected: []const u8,
-    anthropic: ProviderConfig,
-    openai: ProviderConfig,
+    selected: []const u8 = "",
+    anthropic: ProviderConfig = .{ .baseUrl = "https://api.anthropic.com" },
+    openai: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
+    deepseek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
 
     pub fn forProvider(self: *Config, name: []const u8) ?*ProviderConfig {
         if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;
         if (std.mem.eql(u8, name, "OpenAI")) return &self.openai;
+        if (std.mem.eql(u8, name, "DeepSeek")) return &self.deepseek;
         return null;
     }
 };
@@ -43,9 +45,9 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
 
     std.fs.accessAbsolute(path, .{}) catch {
         const empty = Config{
-            .selected = "",
-            .anthropic = .{ .apiKey = "", .baseUrl = "https://api.anthropic.com", .model = "" },
-            .openai = .{ .apiKey = "", .baseUrl = "https://api.openai.com", .model = "" },
+            .anthropic = .{ .baseUrl = "https://api.anthropic.com" },
+            .openai = .{ .baseUrl = "https://api.openai.com" },
+            .deepseek = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
         };
         const json = try std.json.Stringify.valueAlloc(allocator, empty, .{ .whitespace = .indent_4 });
         defer allocator.free(json);

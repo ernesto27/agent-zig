@@ -4,7 +4,7 @@ Terminal-based AI coding agent written in Zig.
 
 ## Features
 
-- **Multi-provider LLM**: Anthropic (Claude Opus/Sonnet/Haiku) and OpenAI (GPT-4o, o3, o4-mini)
+- **Multi-provider LLM**: Anthropic (Claude Opus/Sonnet/Haiku), OpenAI (GPT-5 family), and DeepSeek (V4 Flash/Pro)
 - **Streaming responses**: SSE streaming with real-time token display
 - **Extended thinking**: Visible reasoning for thinking-capable models
 - **Tool system** with approve/deny/accept-all confirmation UI:
