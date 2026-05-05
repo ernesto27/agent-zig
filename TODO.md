@@ -3,7 +3,8 @@
 [x] - show thinking
 [x] - show code before accept- deny
 [x] - tool for search internet
-[] - add provider deep seek
+[x] - add provider deep seek
+[] - add command support
 [] - add provider google
 [] - connect to provider github copilot
 [] - save command result in history to resume
@@ -11,7 +12,7 @@
 [] - add option to add folder to current context
 [] - make tool calls in parallet internet
 [] - show read file using
-[] - suuport skills protocol
+[x] - suuport skills protocol
 [] - show folder running agent,  branch
 [] - add copy text from input
 [x] - exit command

@@ -410,9 +410,13 @@ fn handleEnter(ctx: *InputContext) !bool {
                 });
                 ctx.app.mutex.unlock();
 
+                ctx.app.sessions.appendFmt(alloc, "You: {s}", .{user_input});
+                ctx.app.sessions.appendFmt(alloc, "AI: \n{s}", .{assistant_content});
+
                 assistant_content = &.{};
 
                 try ctx.history.append(alloc, try alloc.dupe(u8, ctx.input.items));
+
                 alloc.free(shell_result.command);
                 ctx.history_idx = null;
                 ctx.draft.clearRetainingCapacity();
