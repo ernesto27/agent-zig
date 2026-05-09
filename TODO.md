@@ -4,6 +4,7 @@
 [x] - show code before accept- deny
 [x] - tool for search internet
 [x] - add provider deep seek
+[x] - when attach image show name for that in chat
 [] - add command support
 [] - add support to add images
 [] - add provider google

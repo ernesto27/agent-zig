@@ -457,12 +457,19 @@ fn handleEnter(ctx: *InputContext) !bool {
             },
             else => {
                 ctx.app.mutex.lock();
+                errdefer ctx.app.mutex.unlock();
 
                 const picked = ctx.at_picker.takePicked(alloc, ctx.input.items);
                 defer alloc.free(picked);
                 for (picked) |p| ctx.app.pending_attachments.append(alloc, p) catch alloc.free(p);
 
-                const user_text = try alloc.dupe(u8, ctx.input.items);
+                const user_text = if (ctx.app.pending_attachments.items.len == 0)
+                    try alloc.dupe(u8, ctx.input.items)
+                else blk: {
+                    const attachment_text = try std.mem.join(alloc, "\n", ctx.app.pending_attachments.items);
+                    defer alloc.free(attachment_text);
+                    break :blk try std.mem.concat(alloc, u8, &.{ ctx.input.items, "\n", attachment_text });
+                };
                 try ctx.app.messages.append(alloc, .{ .role = .user, .content = user_text });
                 ctx.app.mutex.unlock();
 
