@@ -5,9 +5,10 @@
 [x] - tool for search internet
 [x] - add provider deep seek
 [] - add command support
+[] - add support to add images
 [] - add provider google
 [] - connect to provider github copilot
-[] - save command result in history to resume
+[x] - save command result in history to resume
 [x] - add option to run command bash
 [] - add option to add folder to current context
 [] - make tool calls in parallet internet

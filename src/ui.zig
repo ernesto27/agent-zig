@@ -2,6 +2,7 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig").App;
+const image_attach = @import("image_attach.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -204,7 +205,8 @@ pub fn buildInputLayout(
         .visible_count = 1,
         .box_h = 3,
     };
-    const view = buildInputView(alloc, input, prompt, screen_width, cursor_pos) catch fallback;
+    var view = buildInputView(alloc, input, prompt, screen_width, cursor_pos) catch fallback;
+    if (app.pending_attachments.items.len > 0) view.box_h += 1;
     return .{
         .prompt = prompt,
         .view = view,
@@ -217,13 +219,46 @@ pub fn renderInput(
     input: []const u8,
     cursor_pos: usize,
     view: InputView,
+    app: *App,
 ) void {
     const show_prompt = view.visible_start == 0;
+    var prompt_width: u16 = 0;
     if (show_prompt) {
         _ = input_win.printSegment(.{
             .text = prompt,
             .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 1 });
+        prompt_width = @intCast(prompt.len);
+
+        var chip_col: u16 = 1 + prompt_width;
+        var image_idx: u32 = 1;
+        var file_idx: u32 = 1;
+        var buf_off: usize = 0;
+        for (app.pending_attachments.items) |path| {
+            const is_image = image_attach.mimeFromPath(path) != null;
+            const remaining = chipBuf[buf_off..];
+            const chip = if (is_image)
+                std.fmt.bufPrint(remaining, "[Image {d}]", .{image_idx}) catch "[Image]"
+            else
+                std.fmt.bufPrint(remaining, "[File {d}]", .{file_idx}) catch "[File]";
+            buf_off += chip.len;
+            if (is_image) image_idx += 1 else file_idx += 1;
+            const r = input_win.printSegment(.{
+                .text = chip,
+                .style = .{
+                    .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
+                    .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+                    .bold = true,
+                },
+            }, .{ .row_offset = 0, .col_offset = chip_col });
+            chip_col = r.col;
+            const r2 = input_win.printSegment(.{
+                .text = " ",
+                .style = .{},
+            }, .{ .row_offset = 0, .col_offset = chip_col });
+            chip_col = r2.col;
+        }
+        prompt_width = chip_col - 1;
     }
 
     const visible_end = @min(view.visible_start + view.visible_count, view.lines.len);
@@ -232,7 +267,7 @@ pub fn renderInput(
         const logical_row = view.visible_start + row_idx;
         const line_text = input[line.start..line.end];
         const text_col: u16 = if (show_prompt and row_idx == 0)
-            1 + @as(u16, @intCast(prompt.len))
+            1 + prompt_width
         else
             1;
         const cursor_on_row = logical_row == view.cursor_row;
@@ -271,6 +306,7 @@ pub fn renderInput(
 }
 
 var loadingBuf: [32]u8 = undefined;
+var chipBuf: [512]u8 = undefined;
 
 pub fn loading(elapsed_secs: usize) []const u8 {
     const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };

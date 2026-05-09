@@ -5,6 +5,7 @@ const context_usage_mod = @import("context_usage.zig");
 const sessions = @import("sessions.zig");
 const init_mod = @import("commands/init.zig");
 const mode_mod = @import("mode.zig");
+const image_attach = @import("image_attach.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -147,6 +148,13 @@ pub const App = struct {
         for (self.llm_history.items) |msg| {
             switch (msg.content) {
                 .text => |t| self.alloc.free(t),
+                .content_blocks => |blocks| {
+                    for (blocks) |b| {
+                        if (b.text) |t| self.alloc.free(t);
+                        if (b.source) |src| self.alloc.free(src.data);
+                    }
+                    self.alloc.free(blocks);
+                },
                 else => {},
             }
         }
@@ -431,45 +439,94 @@ pub const App = struct {
         else
             "";
 
-        const user_text = blk: {
-            var out = std.ArrayList(u8){};
-            out.appendSlice(alloc, last_user_msg) catch {
-                out.deinit(alloc);
+        const UserText = union(enum) {
+            text_only: []u8,
+            with_images: []agent.llm.message.ContentBlock,
+        };
+
+        const user_text: UserText = blk: {
+            var text_buf = std.ArrayList(u8){};
+
+            text_buf.appendSlice(alloc, last_user_msg) catch {
+                text_buf.deinit(alloc);
                 self.setLoading(false);
                 self.mutex.unlock();
                 return;
             };
+
+            var image_blocks = std.ArrayList(agent.llm.message.ContentBlock){};
 
             const max_size = 512 * 1024;
             for (self.pending_attachments.items) |path| {
-                const file = (if (std.fs.path.isAbsolute(path))
-                    std.fs.openFileAbsolute(path, .{})
-                else
-                    std.fs.cwd().openFile(path, .{})) catch continue;
-                defer file.close();
-                const contents = file.readToEndAlloc(alloc, max_size) catch continue;
-                defer alloc.free(contents);
-                out.appendSlice(alloc, "\n\n<file path=\"") catch {};
-                out.appendSlice(alloc, path) catch {};
-                out.appendSlice(alloc, "\">\n") catch {};
-                out.appendSlice(alloc, contents) catch {};
-                out.appendSlice(alloc, "\n</file>") catch {};
+                if (image_attach.mimeFromPath(path)) |mime| {
+                    const b64 = image_attach.encodeFileBase64(alloc, path) catch continue;
+                    image_blocks.append(alloc, .{
+                        .type = "image",
+                        .source = .{ .media_type = mime, .data = b64 },
+                    }) catch {
+                        alloc.free(b64);
+                        continue;
+                    };
+                } else {
+                    const file = (if (std.fs.path.isAbsolute(path))
+                        std.fs.openFileAbsolute(path, .{})
+                    else
+                        std.fs.cwd().openFile(path, .{})) catch continue;
+                    defer file.close();
+                    const contents = file.readToEndAlloc(alloc, max_size) catch continue;
+                    defer alloc.free(contents);
+                    text_buf.appendSlice(alloc, "\n\n<file path=\"") catch {};
+                    text_buf.appendSlice(alloc, path) catch {};
+                    text_buf.appendSlice(alloc, "\">\n") catch {};
+                    text_buf.appendSlice(alloc, contents) catch {};
+                    text_buf.appendSlice(alloc, "\n</file>") catch {};
+                }
             }
 
             self.clearPendingAttachments();
-            break :blk out.toOwnedSlice(alloc) catch {
-                out.deinit(alloc);
+            const text = text_buf.toOwnedSlice(alloc) catch {
+                text_buf.deinit(alloc);
+                image_blocks.deinit(alloc);
                 self.setLoading(false);
                 self.mutex.unlock();
                 return;
             };
+
+            if (image_blocks.items.len == 0) {
+                image_blocks.deinit(alloc);
+                break :blk .{ .text_only = text };
+            }
+
+            const blocks = alloc.alloc(agent.llm.message.ContentBlock, 1 + image_blocks.items.len) catch {
+                alloc.free(text);
+                image_blocks.deinit(alloc);
+                self.setLoading(false);
+                self.mutex.unlock();
+                return;
+            };
+            blocks[0] = .{ .type = "text", .text = text };
+            @memcpy(blocks[1..], image_blocks.items);
+            image_blocks.deinit(alloc);
+            break :blk .{ .with_images = blocks };
         };
 
-        self.llm_history.append(alloc, .{
-            .role = .user,
-            .content = .{ .text = user_text },
-        }) catch {};
-        self.sessions.appendFmt(alloc, "You: {s}", .{user_text});
+        switch (user_text) {
+            .text_only => |t| {
+                self.llm_history.append(alloc, .{
+                    .role = .user,
+                    .content = .{ .text = t },
+                }) catch {};
+                self.sessions.appendFmt(alloc, "You: {s}", .{t});
+            },
+            .with_images => |blocks| {
+                self.llm_history.append(alloc, .{
+                    .role = .user,
+                    .content = .{ .content_blocks = blocks },
+                }) catch {};
+                const txt = if (blocks[0].text) |t| t else "(image)";
+                self.sessions.appendFmt(alloc, "You: {s} [+image]", .{txt});
+            },
+        }
         self.mutex.unlock();
 
         // 2. Get tool definitions (arena keeps parsed JSON alive)

@@ -132,6 +132,12 @@ pub const ToolResultBlock = struct {
 
 // === Response Types ===
 
+pub const ImageSource = struct {
+    type: []const u8 = "base64",
+    media_type: []const u8,
+    data: []const u8,
+};
+
 pub const ContentBlock = struct {
     type: []const u8,
     text: ?[]const u8 = null,
@@ -142,6 +148,7 @@ pub const ContentBlock = struct {
     id: ?[]const u8 = null,
     name: ?[]const u8 = null,
     input: std.json.Value = .null,
+    source: ?ImageSource = null,
 
     /// Only serialize fields relevant to the block type
     pub fn jsonStringify(self: ContentBlock, jw: anytype) !void {
@@ -156,6 +163,18 @@ pub const ContentBlock = struct {
             if (self.signature) |s| {
                 try jw.objectField("signature");
                 try jw.write(s);
+            }
+        } else if (std.mem.eql(u8, self.type, "image")) {
+            if (self.source) |src| {
+                try jw.objectField("source");
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write(src.type);
+                try jw.objectField("media_type");
+                try jw.write(src.media_type);
+                try jw.objectField("data");
+                try jw.write(src.data);
+                try jw.endObject();
             }
         } else {
             if (self.text) |t| {
@@ -296,4 +315,17 @@ test "textContent returns null for empty content" {
     };
 
     try std.testing.expect(resp.textContent() == null);
+}
+
+test "serialize image ContentBlock" {
+    const alloc = std.testing.allocator;
+    const block = ContentBlock{
+        .type = "image",
+        .source = .{ .media_type = "image/png", .data = "AAAA" },
+    };
+    const json = try std.json.Stringify.valueAlloc(alloc, block, .{});
+    defer alloc.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"image\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"media_type\":\"image/png\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"data\":\"AAAA\"") != null);
 }

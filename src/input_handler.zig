@@ -7,6 +7,7 @@ const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 const ui = @import("ui.zig");
+const image_attach = @import("image_attach.zig");
 
 const log = std.log.scoped(.input_handler);
 
@@ -93,10 +94,36 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 
     if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(ctx.alloc, text);
-    } else {
-        try ctx.input.insertSlice(ctx.alloc, ctx.cursor_pos, text);
-        ctx.cursor_pos += text.len;
+        return;
     }
+
+    // If the paste is a single line that resolves to an existing file, attach it
+    // instead of inserting as text (matches Claude Code / opencode UX).
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    const is_single_line = std.mem.indexOfAny(u8, trimmed, "\r\n") == null;
+    if (is_single_line and trimmed.len > 0) {
+        const exists = if (std.fs.path.isAbsolute(trimmed)) blk: {
+            const f = std.fs.openFileAbsolute(trimmed, .{}) catch break :blk false;
+            f.close();
+            break :blk true;
+        } else blk: {
+            const f = std.fs.cwd().openFile(trimmed, .{}) catch break :blk false;
+            f.close();
+            break :blk true;
+        };
+        if (exists) {
+            const owned = try ctx.alloc.dupe(u8, trimmed);
+            ctx.app.pending_attachments.append(ctx.alloc, owned) catch {
+                ctx.alloc.free(owned);
+                return;
+            };
+            ctx.app.needs_redraw = true;
+            return;
+        }
+    }
+
+    try ctx.input.insertSlice(ctx.alloc, ctx.cursor_pos, text);
+    ctx.cursor_pos += text.len;
 }
 
 // ── private helpers ───────────────────────────────────────────────────────────
@@ -263,6 +290,10 @@ fn handleBackspace(ctx: *InputContext) !void {
             _ = ctx.model_picker.query.orderedRemove(ctx.model_picker.query.items.len - 1);
             try ctx.model_picker.refresh(alloc);
         }
+    } else if (ctx.cursor_pos == 0 and ctx.app.pending_attachments.items.len > 0) {
+        const removed = ctx.app.pending_attachments.pop();
+        if (removed) |path| alloc.free(path);
+        ctx.app.needs_redraw = true;
     } else if (ctx.cursor_pos > 0) {
         _ = ctx.input.orderedRemove(ctx.cursor_pos - 1);
         ctx.cursor_pos -= 1;
