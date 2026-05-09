@@ -1,9 +1,13 @@
 const std = @import("std");
+const anthropic = @import("anthropic.zig");
 const message = @import("message.zig");
-const providers = @import("providers.zig");
+const openai = @import("openai.zig");
 const json_helpers = @import("../json_helpers.zig");
 
 const log = std.log.scoped(.llm);
+
+const appendJsonString = json_helpers.appendJsonString;
+const appendObjectFieldName = json_helpers.appendObjectFieldName;
 
 pub const Config = struct {
     base_url: []const u8,
@@ -14,8 +18,6 @@ pub const Config = struct {
 };
 
 pub const CancelFn = *const fn (*anyopaque) bool;
-
-const anthropic_version = "2023-06-01";
 
 const StreamBlockType = enum {
     text,
@@ -127,16 +129,7 @@ pub const Client = struct {
         messages: []const message.Message,
         tools: []const message.ToolDefinition,
     ) !std.json.Parsed(message.MessagesResponse) {
-        const model_info = providers.findModel(self.config.model);
-        const req = message.MessagesRequest{
-            .model = self.config.model,
-            .messages = messages,
-            .tools = tools,
-            .effort = self.config.effort,
-            .supports_thinking = model_info != null and model_info.?.model.supports_thinking,
-        };
-
-        const body = try std.json.Stringify.valueAlloc(allocator, req, .{});
+        const body = try anthropic.buildRequestBody(allocator, self.config.model, messages, tools, null, false, self.config.effort);
         defer allocator.free(body);
 
         const pretty_req = prettyJson(allocator, body) catch body;
@@ -151,7 +144,7 @@ pub const Client = struct {
 
         const extra_headers = [_]std.http.Header{
             .{ .name = "x-api-key", .value = self.config.api_key },
-            .{ .name = "anthropic-version", .value = anthropic_version },
+            .{ .name = "anthropic-version", .value = anthropic.version },
         };
 
         const result = try self.http_client.fetch(.{
@@ -210,17 +203,7 @@ pub const Client = struct {
         on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
         should_cancel: CancelFn,
     ) !std.json.Parsed(message.MessagesResponse) {
-        const model_info = providers.findModel(self.config.model);
-        const req_body = message.MessagesRequest{
-            .model = self.config.model,
-            .messages = messages,
-            .system = system_prompt,
-            .stream = true,
-            .tools = tools,
-            .effort = self.config.effort,
-            .supports_thinking = model_info != null and model_info.?.model.supports_thinking,
-        };
-        const body = try std.json.Stringify.valueAlloc(allocator, req_body, .{});
+        const body = try anthropic.buildRequestBody(allocator, self.config.model, messages, tools, system_prompt, true, self.config.effort);
         defer allocator.free(body);
 
         const pretty_req = prettyJson(allocator, body) catch body;
@@ -233,7 +216,7 @@ pub const Client = struct {
 
         const extra_headers = [_]std.http.Header{
             .{ .name = "x-api-key", .value = self.config.api_key },
-            .{ .name = "anthropic-version", .value = anthropic_version },
+            .{ .name = "anthropic-version", .value = anthropic.version },
             .{ .name = "accept", .value = "text/event-stream" },
         };
 
@@ -307,7 +290,7 @@ pub const Client = struct {
         on_chunk: *const fn (*anyopaque, []const u8) void,
         should_cancel: CancelFn,
     ) !std.json.Parsed(message.MessagesResponse) {
-        const body = try buildOpenAIRequestBody(allocator, self.config.model, messages, tools, system_prompt, true);
+        const body = try openai.buildRequestBody(allocator, self.config.model, messages, tools, system_prompt, true);
         defer allocator.free(body);
 
         const pretty_req = prettyJson(allocator, body) catch body;
@@ -639,40 +622,6 @@ fn buildStreamedResponseJson(allocator: std.mem.Allocator, stream: *const Stream
     return out.toOwnedSlice(allocator);
 }
 
-fn appendObjectFieldName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8) !void {
-    try appendJsonString(allocator, out, name);
-    try out.append(allocator, ':');
-}
-
-fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
-    try out.append(allocator, '"');
-    for (value) |ch| {
-        switch (ch) {
-            '"' => try out.appendSlice(allocator, "\\\""),
-            '\\' => try out.appendSlice(allocator, "\\\\"),
-            '\n' => try out.appendSlice(allocator, "\\n"),
-            '\r' => try out.appendSlice(allocator, "\\r"),
-            '\t' => try out.appendSlice(allocator, "\\t"),
-            0x08 => try out.appendSlice(allocator, "\\b"),
-            0x0C => try out.appendSlice(allocator, "\\f"),
-            else => {
-                if (ch < 0x20) {
-                    try out.appendSlice(allocator, "\\u00");
-                    try out.append(allocator, hexDigit(ch >> 4));
-                    try out.append(allocator, hexDigit(ch & 0x0F));
-                } else {
-                    try out.append(allocator, ch);
-                }
-            },
-        }
-    }
-    try out.append(allocator, '"');
-}
-
-fn hexDigit(nibble: u8) u8 {
-    return if (nibble < 10) '0' + nibble else 'A' + (nibble - 10);
-}
-
 // === OpenAI Support ===
 
 /// One accumulated tool call from an OpenAI streaming response.
@@ -905,173 +854,6 @@ fn buildOpenAIStreamedResponseJson(
     try appendObjectFieldName(allocator, &out, "output_tokens");
     try out.writer(allocator).print("{d}", .{stream.output_tokens});
     try out.appendSlice(allocator, "}");
-    try out.append(allocator, '}');
-
-    return out.toOwnedSlice(allocator);
-}
-
-/// Serialize messages and tools to OpenAI chat completions request JSON.
-fn buildOpenAIRequestBody(
-    allocator: std.mem.Allocator,
-    model: []const u8,
-    messages: []const message.Message,
-    tools: []const message.ToolDefinition,
-    system_prompt: ?[]const u8,
-    stream: bool,
-) ![]u8 {
-    var out = std.ArrayList(u8){};
-    errdefer out.deinit(allocator);
-
-    try out.appendSlice(allocator, "{");
-    try appendObjectFieldName(allocator, &out, "model");
-    try appendJsonString(allocator, &out, model);
-    try out.append(allocator, ',');
-    try appendObjectFieldName(allocator, &out, "stream");
-    try out.appendSlice(allocator, if (stream) "true" else "false");
-    if (stream) {
-        // Request usage in the stream's final chunk
-        try out.append(allocator, ',');
-        try appendObjectFieldName(allocator, &out, "stream_options");
-        try out.appendSlice(allocator, "{\"include_usage\":true}");
-    }
-
-    // Tools
-    if (tools.len > 0) {
-        try out.append(allocator, ',');
-        try appendObjectFieldName(allocator, &out, "tools");
-        try out.append(allocator, '[');
-        for (tools, 0..) |tool, i| {
-            if (i > 0) try out.append(allocator, ',');
-            try out.appendSlice(allocator, "{");
-            try appendObjectFieldName(allocator, &out, "type");
-            try appendJsonString(allocator, &out, "function");
-            try out.append(allocator, ',');
-            try appendObjectFieldName(allocator, &out, "function");
-            try out.appendSlice(allocator, "{");
-            try appendObjectFieldName(allocator, &out, "name");
-            try appendJsonString(allocator, &out, tool.name);
-            try out.append(allocator, ',');
-            try appendObjectFieldName(allocator, &out, "description");
-            try appendJsonString(allocator, &out, tool.description);
-            try out.append(allocator, ',');
-            try appendObjectFieldName(allocator, &out, "parameters");
-            // Serialize the input_schema as OpenAI "parameters"
-            const schema_json = try std.json.Stringify.valueAlloc(allocator, tool.input_schema, .{});
-            defer allocator.free(schema_json);
-            try out.appendSlice(allocator, schema_json);
-            try out.appendSlice(allocator, "}}");
-        }
-        try out.append(allocator, ']');
-    }
-
-    // Messages
-    try out.append(allocator, ',');
-    try appendObjectFieldName(allocator, &out, "messages");
-    try out.append(allocator, '[');
-
-    var first_msg = true;
-    if (system_prompt) |sp| {
-        try out.appendSlice(allocator, "{");
-        try appendObjectFieldName(allocator, &out, "role");
-        try appendJsonString(allocator, &out, "system");
-        try out.append(allocator, ',');
-        try appendObjectFieldName(allocator, &out, "content");
-        try appendJsonString(allocator, &out, sp);
-        try out.append(allocator, '}');
-        first_msg = false;
-    }
-
-    for (messages) |msg| {
-        switch (msg.content) {
-            .text => |text| {
-                if (!first_msg) try out.append(allocator, ',');
-                first_msg = false;
-                try out.appendSlice(allocator, "{");
-                try appendObjectFieldName(allocator, &out, "role");
-                try appendJsonString(allocator, &out, @tagName(msg.role));
-                try out.append(allocator, ',');
-                try appendObjectFieldName(allocator, &out, "content");
-                try appendJsonString(allocator, &out, text);
-                try out.append(allocator, '}');
-            },
-            .content_blocks => |blocks| {
-                // Assistant message with possible text + tool_calls
-                if (!first_msg) try out.append(allocator, ',');
-                first_msg = false;
-                try out.appendSlice(allocator, "{");
-                try appendObjectFieldName(allocator, &out, "role");
-                try appendJsonString(allocator, &out, "assistant");
-
-                // Collect text and tool_use blocks separately
-                var text_content: ?[]const u8 = null;
-                var tool_use_count: usize = 0;
-                for (blocks) |blk| {
-                    if (std.mem.eql(u8, blk.type, "text")) text_content = blk.text;
-                    if (std.mem.eql(u8, blk.type, "tool_use")) tool_use_count += 1;
-                }
-
-                try out.append(allocator, ',');
-                try appendObjectFieldName(allocator, &out, "content");
-                if (text_content) |t| {
-                    try appendJsonString(allocator, &out, t);
-                } else {
-                    try appendJsonString(allocator, &out, "");
-                }
-
-                if (tool_use_count > 0) {
-                    try out.append(allocator, ',');
-                    try appendObjectFieldName(allocator, &out, "tool_calls");
-                    try out.append(allocator, '[');
-                    var first_tc = true;
-                    for (blocks) |blk| {
-                        if (!std.mem.eql(u8, blk.type, "tool_use")) continue;
-                        if (!first_tc) try out.append(allocator, ',');
-                        first_tc = false;
-                        try out.appendSlice(allocator, "{");
-                        try appendObjectFieldName(allocator, &out, "id");
-                        try appendJsonString(allocator, &out, blk.id orelse "");
-                        try out.append(allocator, ',');
-                        try appendObjectFieldName(allocator, &out, "type");
-                        try appendJsonString(allocator, &out, "function");
-                        try out.append(allocator, ',');
-                        try appendObjectFieldName(allocator, &out, "function");
-                        try out.appendSlice(allocator, "{");
-                        try appendObjectFieldName(allocator, &out, "name");
-                        try appendJsonString(allocator, &out, blk.name orelse "");
-                        try out.append(allocator, ',');
-                        try appendObjectFieldName(allocator, &out, "arguments");
-                        // input is a json.Value — serialize it as a JSON string (OpenAI expects string)
-                        const args_json = try std.json.Stringify.valueAlloc(allocator, blk.input, .{});
-                        defer allocator.free(args_json);
-                        try appendJsonString(allocator, &out, args_json);
-                        try out.appendSlice(allocator, "}}");
-                    }
-                    try out.append(allocator, ']');
-                }
-
-                try out.append(allocator, '}');
-            },
-            .tool_result_blocks => |blocks| {
-                // Each tool result becomes a separate "tool" role message
-                for (blocks) |blk| {
-                    if (!first_msg) try out.append(allocator, ',');
-                    first_msg = false;
-                    try out.appendSlice(allocator, "{");
-                    try appendObjectFieldName(allocator, &out, "role");
-                    try appendJsonString(allocator, &out, "tool");
-                    try out.append(allocator, ',');
-                    try appendObjectFieldName(allocator, &out, "tool_call_id");
-                    try appendJsonString(allocator, &out, blk.tool_use_id);
-                    try out.append(allocator, ',');
-                    try appendObjectFieldName(allocator, &out, "content");
-                    try appendJsonString(allocator, &out, blk.content);
-                    try out.append(allocator, '}');
-                }
-            },
-        }
-    }
-
-    try out.append(allocator, ']');
     try out.append(allocator, '}');
 
     return out.toOwnedSlice(allocator);

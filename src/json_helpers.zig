@@ -36,3 +36,37 @@ pub fn getU64Field(value: std.json.Value, field: []const u8) ?u64 {
         else => null,
     };
 }
+
+pub fn appendObjectFieldName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8) !void {
+    try appendJsonString(allocator, out, name);
+    try out.append(allocator, ':');
+}
+
+pub fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |ch| {
+        switch (ch) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            0x08 => try out.appendSlice(allocator, "\\b"),
+            0x0C => try out.appendSlice(allocator, "\\f"),
+            else => {
+                if (ch < 0x20) {
+                    try out.appendSlice(allocator, "\\u00");
+                    try out.append(allocator, hexDigit(ch >> 4));
+                    try out.append(allocator, hexDigit(ch & 0x0F));
+                } else {
+                    try out.append(allocator, ch);
+                }
+            },
+        }
+    }
+    try out.append(allocator, '"');
+}
+
+fn hexDigit(nibble: u8) u8 {
+    return if (nibble < 10) '0' + nibble else 'A' + (nibble - 10);
+}
