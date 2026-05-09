@@ -50,6 +50,8 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
     } else if (key.matches('c', .{ .ctrl = true })) {
         countCtrlPlusC += 1;
         ctx.show_exit.* = true;
+        clearInput(ctx);
+
         if (countCtrlPlusC == 2) {
             return true;
         }
@@ -128,6 +130,11 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 
 // ── private helpers ───────────────────────────────────────────────────────────
 
+fn clearInput(ctx: *InputContext) void {
+    ctx.input.clearRetainingCapacity();
+    ctx.cursor_pos = 0;
+}
+
 fn spawnLlmRequest(ctx: *InputContext) !void {
     if (ctx.app.llm_client.config.api_key.len == 0) {
         ctx.app.mutex.lock();
@@ -157,8 +164,7 @@ fn spawnLlmRequest(ctx: *InputContext) !void {
 const SlashResult = enum { none, send, quit };
 
 fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction) !SlashResult {
-    ctx.input.clearRetainingCapacity();
-    ctx.cursor_pos = 0;
+    clearInput(ctx);
     switch (action) {
         .provider => ctx.provider_picker.open(),
         .model => try ctx.model_picker.open(ctx.alloc),
@@ -355,8 +361,7 @@ fn handleEnter(ctx: *InputContext) !bool {
                 result = try runSlashCommand(ctx, action);
             } else if (ctx.app.skill_registry.find(cmd.name) != null) {
                 if (!ctx.app.is_loading) {
-                    ctx.input.clearRetainingCapacity();
-                    ctx.cursor_pos = 0;
+                    clearInput(ctx);
                     try ctx.app.skillCMD(cmd.name);
                     result = .send;
                 }
@@ -451,8 +456,7 @@ fn handleEnter(ctx: *InputContext) !bool {
                 alloc.free(shell_result.command);
                 ctx.history_idx = null;
                 ctx.draft.clearRetainingCapacity();
-                ctx.input.clearRetainingCapacity();
-                ctx.cursor_pos = 0;
+                clearInput(ctx);
                 ctx.app.needs_redraw = true;
             },
             else => {
@@ -476,8 +480,7 @@ fn handleEnter(ctx: *InputContext) !bool {
                 try ctx.history.append(alloc, try alloc.dupe(u8, ctx.input.items));
                 ctx.history_idx = null;
                 ctx.draft.clearRetainingCapacity();
-                ctx.input.clearRetainingCapacity();
-                ctx.cursor_pos = 0;
+                clearInput(ctx);
 
                 try spawnLlmRequest(ctx);
             },
