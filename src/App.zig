@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const context_usage_mod = @import("context_usage.zig");
 const sessions = @import("sessions.zig");
+const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
 const mode_mod = @import("mode.zig");
 const image_attach = @import("image_attach.zig");
@@ -80,6 +81,7 @@ pub const App = struct {
     system_prompt: agent.system_prompt.SystemPrompt = .{},
     sessions: sessions.Sessions = .{},
     init_cmd: init_mod.Init = .{},
+    compact_mod: compact_mod.Compact = .{},
     mutex: std.Thread.Mutex = .{},
     is_loading: bool = false,
     start_time: ?i64 = null,
@@ -145,6 +147,10 @@ pub const App = struct {
             if (msg.thinking) |t| self.alloc.free(t);
             if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
         }
+        self.freeLlmHistory();
+    }
+
+    fn freeLlmHistory(self: *Self) void {
         for (self.llm_history.items) |msg| {
             switch (msg.content) {
                 .text => |t| self.alloc.free(t),
@@ -165,6 +171,26 @@ pub const App = struct {
         try self.llm_history.append(alloc, .{ .role = .user, .content = .{ .text = content } });
     }
 
+    fn messagesToString(self: *Self) ![]u8 {
+        var buf = std.ArrayList(u8){};
+        errdefer buf.deinit(self.alloc);
+
+        for (self.messages.items) |msg| {
+            const role = switch (msg.role) {
+                .user => "User",
+                .assistant => "Assistant",
+                .notice => "Notice",
+            };
+
+            try buf.writer(self.alloc).print("{s}: {s}\n", .{ role, msg.content });
+            if (msg.thinking) |thinking| {
+                try buf.writer(self.alloc).print("Thinking: {s}\n", .{thinking});
+            }
+        }
+
+        return buf.toOwnedSlice(self.alloc);
+    }
+
     pub fn clearHistory(self: *Self) void {
         self.freeMessages();
         self.messages.clearRetainingCapacity();
@@ -175,6 +201,17 @@ pub const App = struct {
         const prompt = init_mod.Init.getInitPrompt();
         const content = try self.alloc.dupe(u8, prompt);
         try self.messages.append(self.alloc, .{ .role = .user, .content = content });
+    }
+
+    pub fn compactCMD(self: *Self) !void {
+        const transcript = try self.messagesToString();
+        defer self.alloc.free(transcript);
+
+        const prompt = try compact_mod.Compact.getPrompt(self.alloc, transcript);
+        self.freeLlmHistory();
+        self.llm_history.clearRetainingCapacity();
+        self.clearPendingAttachments();
+        try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
     }
 
     pub fn skillCMD(self: *Self, skill_name: []const u8) !void {

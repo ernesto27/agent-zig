@@ -6,8 +6,11 @@
 [x] - add provider deep seek
 [x] - when attach image show name for that in chat
 [x] - first ctrl-c should empty input box
+[] - context use KB does not work in deep seek
+[] - create github actions ,  build TUI
+[] - compact session
+[] - fork session/f
 [] - add command support
-[] - add support to add images
 [] - add provider google
 [] - connect to provider github copilot
 [x] - save command result in history to resume
@@ -27,9 +30,7 @@
 [x] - agent.log must be save in .config folder
 [x] - refactor render 
 [x] - when sho preview file,  put scroll at top
-[] - view images analizy
 [x] - add plan mode
-[] - when save session,  also save tool response and action
 [] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
 [] - fix model descriptcion space ,  
 [] - do not show this err.httprequestfailes, show a nice error message

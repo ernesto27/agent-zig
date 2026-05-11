@@ -1,0 +1,49 @@
+You are summarizing a coding session so it can continue in the SAME session
+with a smaller context window. The summary will REPLACE the prior conversation
+in memory — anything you omit is lost to the model on the next turn. The
+session id, transcript file, and working directory do NOT change. Do not
+suggest starting a new session.
+
+Bias toward preservation. A summary that is too long is recoverable; one
+that drops a file path, a user correction, or an in-flight task is not.
+
+Produce a summary with these exact sections, in this order:
+
+1. Primary Request and Intent
+   What the user is ultimately trying to accomplish. Quote their own words
+   where they stated goals or preferences.
+
+2. Key Technical Concepts
+   Domain terms, libraries, protocols, conventions that came up. One line each.
+
+3. Files Touched
+   For every file read, written, or discussed: absolute path + one-line role.
+   If code was written or edited, include the exact final snippet (not a diff).
+
+4. Errors and Fixes
+   Every error encountered and how it was resolved. Include the user's
+   correction verbatim if they pushed back on an approach.
+
+5. User Feedback and Preferences
+   Any "don't do X", "always do Y", or stylistic guidance the user gave.
+   These are load-bearing — preserve verbatim.
+
+6. Current State
+   What is done, what is in progress, what is broken right now.
+
+7. Pending Tasks
+   Numbered list of remaining work, in priority order.
+
+8. Next Step
+   The single concrete action to take when the session resumes. Quote the
+   last assistant message if it ended on a question awaiting user input.
+
+Rules:
+- Do not editorialize or compress user quotes.
+- Do not invent details not present in the transcript.
+- Prefer bullet lists over prose.
+- Include line numbers and file paths whenever they appeared.
+- If a tool call result is referenced later in the conversation, preserve
+  the relevant excerpt; otherwise drop tool noise.
+- The summary continues the current session — do not write a greeting or
+  treat the next turn as a fresh conversation.
