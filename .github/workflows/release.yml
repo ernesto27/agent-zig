@@ -1,0 +1,26 @@
+name: Release (rolling)
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - run: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseFast --prefix dist/linux
+      - run: tar -czf agent-zig-linux-x86_64.tar.gz -C dist/linux/bin agent-zig
+
+      - uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: latest
+          prerelease: true
+          title: "Latest Build"
+          files: agent-zig-linux-x86_64.tar.gz
