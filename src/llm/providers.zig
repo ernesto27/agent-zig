@@ -30,6 +30,7 @@ pub const providers = [_]Provider{
     .{
         .name = "OpenAI",
         .models = &[_]Model{
+            .{ .id = "gpt-5.5", .display = "GPT-5.5", .supports_thinking = true, .max_context = 1_050_000 },
             .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true, .max_context = 272_000 },
             .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true, .max_context = 272_000 },
             .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true, .max_context = 128_000 },

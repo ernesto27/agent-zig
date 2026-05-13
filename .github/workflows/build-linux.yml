@@ -1,0 +1,27 @@
+name: Build Linux
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.15.2
+
+      - name: Test
+        run: zig build test
+
+      - name: Build (static musl)
+        run: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseFast --prefix dist/linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-zig-linux-x86_64
+          path: dist/linux/bin/agent-zig
+          if-no-files-found: error
