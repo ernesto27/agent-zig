@@ -203,14 +203,29 @@ pub const App = struct {
         try self.messages.append(self.alloc, .{ .role = .user, .content = content });
     }
 
-    pub fn compactCMD(self: *Self) !void {
+    fn buildCompactPrompt(self: *Self) ![]const u8 {
         const transcript = try self.messagesToString();
         defer self.alloc.free(transcript);
 
-        const prompt = try compact_mod.Compact.getPrompt(self.alloc, transcript);
+        return compact_mod.Compact.getPrompt(self.alloc, transcript);
+    }
+
+    pub fn compactCMD(self: *Self) !void {
+        const prompt = try self.buildCompactPrompt();
         self.freeLlmHistory();
         self.llm_history.clearRetainingCapacity();
         self.clearPendingAttachments();
+        try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
+    }
+
+    pub fn forkCMD(self: *Self) !void {
+        const prompt = try self.buildCompactPrompt();
+        errdefer self.alloc.free(prompt);
+
+        try self.sessions.fork(prompt);
+
+        self.clearHistory();
+        try self.appendToHistory(self.alloc, prompt);
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
     }
 

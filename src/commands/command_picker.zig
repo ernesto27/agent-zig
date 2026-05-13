@@ -4,7 +4,7 @@ const agent = @import("agent");
 
 pub const MAX_RESULTS = 10;
 
-pub const CommandAction = enum { provider, model, clear, compact, resume_session, init, exit };
+pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, exit };
 
 pub const Command = struct {
     name: []const u8,
@@ -17,6 +17,7 @@ pub const commands = [_]Command{
     .{ .name = "model", .description = "Choose active model", .action = .model },
     .{ .name = "clear", .description = "Clear conversation", .action = .clear },
     .{ .name = "compact", .description = "Compact conversation", .action = .compact },
+    .{ .name = "fork", .description = "Fork session", .action = .fork },
     .{ .name = "resume", .description = "Resume conversation", .action = .resume_session },
     .{ .name = "init", .description = "Create or update AGENTS.md", .action = .init },
     .{ .name = "exit", .description = "Exit the application", .action = .exit },

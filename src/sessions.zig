@@ -42,11 +42,7 @@ pub const Sessions = struct {
             log.err("failed to load session entries: {}", .{err});
         };
 
-        const filename = try Sessions.generateFilename(allocator);
-        defer allocator.free(filename);
-
-        const path = try std.fs.path.join(allocator, &.{ dir_path, filename });
-        self.pending_path = path;
+        self.pending_path = try self.createPendingPath();
     }
 
     fn loadEntries(self: *Sessions, allocator: std.mem.Allocator, dir_path: []const u8) !void {
@@ -81,6 +77,32 @@ pub const Sessions = struct {
             const preview = readFirstLine(allocator, dir, f.name) catch try allocator.dupe(u8, f.name);
             try self.entries.append(allocator, .{ .filename = filename, .preview = preview, .date = date });
         }
+    }
+
+    pub fn fork(self: *Sessions, text: []const u8) !void {
+        if (self.file) |f| {
+            f.close();
+            self.file = null;
+        }
+        if (self.pending_path) |p| {
+            self.allocator.free(p);
+            self.pending_path = null;
+        }
+
+        self.pending_path = try self.createPendingPath();
+        self.appendFmt(self.allocator, "{s}", .{text});
+    }
+
+    fn createPendingPath(self: *Sessions) ![]const u8 {
+        const allocator = self.allocator;
+        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        const dir_path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
+        defer allocator.free(dir_path);
+
+        const filename = try Sessions.generateFilename(allocator);
+        defer allocator.free(filename);
+
+        return std.fs.path.join(allocator, &.{ dir_path, filename });
     }
 
     fn parseDateFromFilename(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
@@ -231,10 +253,20 @@ pub const Sessions = struct {
         const path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions", filename });
         defer allocator.free(path);
         const f = try std.fs.openFileAbsolute(path, .{ .mode = .read_write });
-        const content = f.readToEndAlloc(allocator, max_bytes) catch |err| { f.close(); return err; };
-        f.seekFromEnd(0) catch |err| { f.close(); allocator.free(content); return err; };
+        const content = f.readToEndAlloc(allocator, max_bytes) catch |err| {
+            f.close();
+            return err;
+        };
+        f.seekFromEnd(0) catch |err| {
+            f.close();
+            allocator.free(content);
+            return err;
+        };
         if (self.file) |old| old.close();
-        if (self.pending_path) |p| { allocator.free(p); self.pending_path = null; }
+        if (self.pending_path) |p| {
+            allocator.free(p);
+            self.pending_path = null;
+        }
         self.file = f;
         return content;
     }

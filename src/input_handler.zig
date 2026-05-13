@@ -174,6 +174,11 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             try ctx.app.compactCMD();
             return .send;
         },
+        .fork => {
+            if (ctx.app.is_loading) return .none;
+            try ctx.app.forkCMD();
+            return .send;
+        },
         .resume_session => ctx.app.sessions.open(),
         .init => {
             if (ctx.app.is_loading) return .none;

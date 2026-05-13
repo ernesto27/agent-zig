@@ -6,10 +6,11 @@
 [x] - add provider deep seek
 [x] - when attach image show name for that in chat
 [x] - first ctrl-c should empty input box
+[] - when change session i want to update usage of context
 [] - context use KB does not work in deep seek
 [] - create github actions ,  build TUI
 [] - compact session
-[] - fork session/f
+[] - fork session ,  new context
 [] - add command support
 [] - add provider google
 [] - connect to provider github copilot
