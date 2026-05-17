@@ -8,9 +8,9 @@
 [x] - first ctrl-c should empty input box
 [] - when change session i want to update usage of context
 [] - context use KB does not work in deep seek
-[] - create github actions ,  build TUI
-[] - compact session
-[] - fork session ,  new context
+[x] - create github actions ,  build TUI
+[x] - compact session
+[x] - fork session ,  new context
 [] - add command support
 [] - add provider google
 [] - connect to provider github copilot

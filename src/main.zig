@@ -126,6 +126,7 @@ pub fn main() !void {
         ctx.history.deinit(alloc);
     }
     var selection: chat_selection.SelectionState = .{};
+    var input_selection: chat_selection.InputSelectionState = .{};
     var clipboard_status: ?[]const u8 = null;
     var bracketed_paste = false;
     var paste_buf = std.ArrayList(u8){};
@@ -142,6 +143,7 @@ pub fn main() !void {
                     continue;
                 }
                 if (try input_handler.handleKey(&ctx, key)) running = false;
+                input_selection.clear();
                 app.needs_redraw = true;
             },
             .paste_start => {
@@ -151,6 +153,7 @@ pub fn main() !void {
             .paste_end => {
                 bracketed_paste = false;
                 try input_handler.handlePasteEnd(&ctx, paste_buf.items);
+                input_selection.clear();
                 app.needs_redraw = true;
             },
             .mouse => |mouse| {
@@ -187,60 +190,78 @@ pub fn main() !void {
                         .border = .{ .where = .all, .glyphs = .single_rounded },
                     });
 
-                    switch (mouse.type) {
-                        .press => {
-                            clipboard_status = null;
-                            if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
-                                selection.anchor = point;
-                                selection.focus = point;
-                                selection.dragging = true;
-                                app.needs_redraw = true;
-                            } else {
-                                const had_selection = selection.anchor != null or selection.focus != null;
-                                selection.clear();
-                                if (had_selection) app.needs_redraw = true;
-                            }
-                        },
-                        .drag => {
-                            if (selection.dragging) {
-                                if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
-                                    selection.focus = point;
-                                    app.needs_redraw = true;
-                                }
-                            }
-                        },
-                        .release => {
-                            if (selection.dragging) {
-                                selection.dragging = false;
-                                if (chat_selection.pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
-                                    selection.focus = point;
-                                }
+                    const input_win = vx.window().child(.{
+                        .x_off = 0,
+                        .y_off = layout.input_y,
+                        .width = vx.screen.width,
+                        .height = input_layout.view.box_h,
+                        .border = .{ .where = .all, .glyphs = .single_rounded },
+                    });
 
-                                if (selection.bounds(rendered_lines)) |bounds| {
-                                    const copied = chat_selection.selectedText(alloc, rendered_lines, bounds, vx.screen.width_method) catch blk: {
-                                        clipboard_status = " copy failed ";
-                                        break :blk null;
-                                    };
-                                    if (copied) |text| {
-                                        defer alloc.free(text);
-                                        if (text.len == 0) {
-                                            clipboard_status = " nothing selected ";
-                                        } else {
-                                            vx.copyToSystemClipboard(tty.writer(), text, alloc) catch {
-                                                clipboard_status = " copy failed ";
-                                                app.needs_redraw = true;
-                                                break;
-                                            };
-                                            clipboard_status = " copied selection ";
-                                        }
-                                    }
-                                } else {
-                                    clipboard_status = " drag to copy ";
-                                }
-                                app.needs_redraw = true;
+                    const handle_input_selection =
+                        !app.tool_confirmation.pending and
+                        (input_selection.dragging or
+                            (mouse.type == .press and ui.inputPointFromMouse(mouse, input_win, input_layout.prompt, input_layout.view, &app) != null));
+
+                    if (handle_input_selection) {
+                        selection.clear();
+                        const mouse_result = ui.handleInputMouseSelection(
+                            alloc,
+                            mouse,
+                            &input_selection,
+                            input_win,
+                            input_layout.prompt,
+                            ctx.input.items,
+                            input_layout.view,
+                            &app,
+                        ) catch blk: {
+                            clipboard_status = " copy failed ";
+                            app.needs_redraw = true;
+                            break :blk null;
+                        };
+                        if (mouse_result) |result| {
+                            if (result.clear_status) clipboard_status = null;
+                            if (result.status) |status| clipboard_status = status;
+                            if (result.needs_redraw) app.needs_redraw = true;
+                            if (result.copied_text) |text| {
+                                defer alloc.free(text);
+                                vx.copyToSystemClipboard(tty.writer(), text, alloc) catch {
+                                    clipboard_status = " copy failed ";
+                                    app.needs_redraw = true;
+                                    break;
+                                };
+                                clipboard_status = " copied input ";
                             }
-                        },
-                        else => {},
+                        }
+                    } else {
+                        if (mouse.type == .press) input_selection.clear();
+                        const mouse_result = chat_selection.handleMouseSelection(
+                            alloc,
+                            mouse,
+                            &selection,
+                            chat_win,
+                            scroll_offset,
+                            rendered_lines,
+                            vx.screen.width_method,
+                        ) catch blk: {
+                            clipboard_status = " copy failed ";
+                            app.needs_redraw = true;
+                            break :blk null;
+                        };
+                        if (mouse_result) |result| {
+                            if (result.clear_status) clipboard_status = null;
+                            if (result.status) |status| clipboard_status = status;
+                            if (result.needs_redraw) app.needs_redraw = true;
+                            if (result.copied_text) |text| {
+                                defer alloc.free(text);
+                                vx.copyToSystemClipboard(tty.writer(), text, alloc) catch {
+                                    clipboard_status = " copy failed ";
+                                    app.needs_redraw = true;
+                                    break;
+                                };
+                                clipboard_status = " copied selection ";
+                            }
+                        }
                     }
                 }
             },
@@ -361,7 +382,7 @@ pub fn main() !void {
                 .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
             }, .{ .row_offset = 0, .col_offset = 1 });
         } else {
-            ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view, &app);
+            ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view, &app, ui.inputSelectionBounds(input_selection, input_layout.view));
         }
 
         // Status

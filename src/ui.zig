@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig").App;
 const image_attach = @import("image_attach.zig");
+const chat_selection = @import("chat_selection.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -10,54 +11,6 @@ const EventLoop = vaxis.Loop(Event);
 pub const SpinnerState = struct {
     generation: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
-
-/// Wrap text into at most `max_lines` lines of `width` columns.
-/// Handles embedded newlines: splits on '\n' first, then word-wraps each line.
-/// Returns a fixed array; unused slots are null.
-pub fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_lines]?[]const u8 {
-    var lines: [max_lines]?[]const u8 = .{null} ** max_lines;
-    if (width == 0) return lines;
-    var line_idx: usize = 0;
-
-    // Split on newlines first
-    var rest = text;
-    while (rest.len > 0 and line_idx < max_lines) {
-        // Find next newline (or end of text)
-        const nl_pos = std.mem.indexOfScalar(u8, rest, '\n');
-        const physical_line = if (nl_pos) |pos| rest[0..pos] else rest;
-        rest = if (nl_pos) |pos| rest[pos + 1 ..] else &.{};
-
-        // Word-wrap this physical line
-        if (physical_line.len == 0) {
-            // Empty line (consecutive newlines) — emit a blank
-            lines[line_idx] = "";
-            line_idx += 1;
-            continue;
-        }
-
-        var start: usize = 0;
-        while (start < physical_line.len and line_idx < max_lines) {
-            var end = if (start + width < physical_line.len) start + width else physical_line.len;
-
-            if (end < physical_line.len) {
-                var best = end;
-                while (best > start) : (best -= 1) {
-                    if (physical_line[best] == ' ') {
-                        end = best;
-                        break;
-                    }
-                }
-            }
-
-            lines[line_idx] = physical_line[start..end];
-            line_idx += 1;
-            start = end;
-            if (start < physical_line.len and physical_line[start] == ' ') start += 1;
-        }
-    }
-
-    return lines;
-}
 
 const InputLine = struct {
     start: usize,
@@ -79,6 +32,15 @@ pub const InputLayout = struct {
 };
 
 const max_input_body_lines: usize = 6;
+
+const InputViewLineLengths = struct {
+    view: InputView,
+
+    pub fn lineLen(self: InputViewLineLengths, line_idx: usize) usize {
+        const line = self.view.lines[line_idx];
+        return line.end - line.start;
+    }
+};
 
 fn buildInputLines(
     alloc: std.mem.Allocator,
@@ -220,6 +182,7 @@ pub fn renderInput(
     cursor_pos: usize,
     view: InputView,
     app: *App,
+    selection_bounds: ?chat_selection.InputSelectionBounds,
 ) void {
     const show_prompt = view.visible_start == 0;
     var prompt_width: u16 = 0;
@@ -301,6 +264,189 @@ pub fn renderInput(
                 .text = line_text,
                 .style = .{ .bold = true },
             }, .{ .row_offset = render_row, .col_offset = text_col });
+        }
+    }
+
+    if (selection_bounds) |bounds| {
+        applyInputSelectionHighlight(input_win, prompt_width, view, bounds);
+    }
+}
+
+fn inputTextCol(prompt_width: u16, visible_row: usize, visible_start: usize) u16 {
+    return if (visible_start == 0 and visible_row == 0)
+        1 + prompt_width
+    else
+        1;
+}
+
+pub fn inputPointFromMouse(
+    mouse: vaxis.Mouse,
+    input_win: vaxis.Window,
+    prompt: []const u8,
+    view: InputView,
+    app: *App,
+) ?chat_selection.InputTextPoint {
+    const hit = vaxis.Window.hasMouse(input_win, mouse) orelse return null;
+    const row: usize = @intCast(hit.row - input_win.y_off);
+    if (row >= view.visible_count) return null;
+
+    const line_idx = view.visible_start + row;
+    if (line_idx >= view.lines.len) return null;
+
+    const line = view.lines[line_idx];
+    const line_len = line.end - line.start;
+    if (line_len == 0) return null;
+
+    const prompt_width = renderedPromptWidth(prompt, view, app);
+    const text_col = inputTextCol(prompt_width, row, view.visible_start);
+    const col: usize = @intCast(hit.col - input_win.x_off);
+    const line_col = if (col <= text_col) 0 else @min(col - text_col, line_len - 1);
+
+    return .{ .line = line_idx, .col = line_col };
+}
+
+pub fn handleInputMouseSelection(
+    allocator: std.mem.Allocator,
+    mouse: vaxis.Mouse,
+    selection: *chat_selection.InputSelectionState,
+    input_win: vaxis.Window,
+    prompt: []const u8,
+    input: []const u8,
+    view: InputView,
+    app: *App,
+) !chat_selection.SelectionActionResult {
+    switch (mouse.type) {
+        .press => {
+            var result: chat_selection.SelectionActionResult = .{ .clear_status = true };
+            if (inputPointFromMouse(mouse, input_win, prompt, view, app)) |point| {
+                selection.anchor = point;
+                selection.focus = point;
+                selection.dragging = true;
+                result.needs_redraw = true;
+            } else {
+                const had_selection = selection.anchor != null or selection.focus != null;
+                selection.clear();
+                result.needs_redraw = had_selection;
+            }
+            return result;
+        },
+        .drag => {
+            if (selection.dragging) {
+                if (inputPointFromMouse(mouse, input_win, prompt, view, app)) |point| {
+                    selection.focus = point;
+                    return .{ .needs_redraw = true };
+                }
+            }
+        },
+        .release => {
+            if (selection.dragging) {
+                selection.dragging = false;
+                if (inputPointFromMouse(mouse, input_win, prompt, view, app)) |point| {
+                    selection.focus = point;
+                }
+
+                if (selection.bounds(InputViewLineLengths{ .view = view })) |bounds| {
+                    const text = try selectedInputText(allocator, input, view, bounds);
+                    if (text.len == 0) {
+                        allocator.free(text);
+                        return .{ .status = " nothing selected ", .needs_redraw = true };
+                    }
+                    return .{ .copied_text = text, .needs_redraw = true };
+                }
+
+                return .{ .status = " drag to copy ", .needs_redraw = true };
+            }
+        },
+        else => {},
+    }
+
+    return .{};
+}
+
+pub fn inputSelectionBounds(
+    selection: chat_selection.InputSelectionState,
+    view: InputView,
+) ?chat_selection.InputSelectionBounds {
+    return selection.bounds(InputViewLineLengths{ .view = view });
+}
+
+fn renderedPromptWidth(prompt: []const u8, view: InputView, app: *App) u16 {
+    if (view.visible_start != 0) return 0;
+
+    var width: u16 = @intCast(prompt.len);
+    for (app.pending_attachments.items) |path| {
+        const is_image = image_attach.mimeFromPath(path) != null;
+        width += if (is_image) "[Image 1] ".len else "[File 1] ".len;
+    }
+    return width;
+}
+
+fn inputSelectionRangeForLine(bounds: chat_selection.InputSelectionBounds, line_idx: usize, line_len: usize) ?struct { start: usize, end: usize } {
+    if (line_len == 0) return null;
+    if (line_idx < bounds.start.line or line_idx > bounds.end.line) return null;
+
+    var start_col: usize = 0;
+    var end_col: usize = line_len;
+
+    if (bounds.start.line == bounds.end.line) {
+        start_col = bounds.start.col;
+        end_col = bounds.end.col;
+    } else if (line_idx == bounds.start.line) {
+        start_col = bounds.start.col;
+    } else if (line_idx == bounds.end.line) {
+        end_col = bounds.end.col;
+    }
+
+    start_col = @min(start_col, line_len);
+    end_col = @min(end_col, line_len);
+    if (start_col >= end_col) return null;
+
+    return .{ .start = start_col, .end = end_col };
+}
+
+pub fn selectedInputText(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    view: InputView,
+    bounds: chat_selection.InputSelectionBounds,
+) ![]u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    var line_idx = bounds.start.line;
+    while (line_idx <= bounds.end.line) : (line_idx += 1) {
+        const line = view.lines[line_idx];
+        const line_len = line.end - line.start;
+        const range = inputSelectionRangeForLine(bounds, line_idx, line_len) orelse continue;
+
+        if (out.items.len > 0) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, input[line.start + range.start .. line.start + range.end]);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn applyInputSelectionHighlight(
+    input_win: vaxis.Window,
+    prompt_width: u16,
+    view: InputView,
+    bounds: chat_selection.InputSelectionBounds,
+) void {
+    const visible_end = @min(view.visible_start + view.visible_count, view.lines.len);
+    for (view.lines[view.visible_start..visible_end], 0..) |line, row_idx| {
+        const line_len = line.end - line.start;
+        const range = inputSelectionRangeForLine(bounds, view.visible_start + row_idx, line_len) orelse continue;
+        const text_col = inputTextCol(prompt_width, row_idx, view.visible_start);
+        const start_col: u16 = @intCast(@as(usize, text_col) + range.start);
+        const end_col: u16 = @intCast(@as(usize, text_col) + range.end);
+
+        var col = start_col;
+        while (col < end_col and col < input_win.width) : (col += 1) {
+            var cell: vaxis.Cell = input_win.readCell(col, @intCast(row_idx)) orelse .{
+                .char = .{ .grapheme = " ", .width = 1 },
+            };
+            cell.style.reverse = true;
+            input_win.writeCell(col, @intCast(row_idx), cell);
         }
     }
 }
@@ -693,25 +839,4 @@ pub fn renderStatus(
             .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
     }
-}
-
-test "wrapText handles newlines" {
-    const result = wrapText("hello\nworld", 80, 10);
-    try std.testing.expectEqualStrings("hello", result[0].?);
-    try std.testing.expectEqualStrings("world", result[1].?);
-    try std.testing.expect(result[2] == null);
-}
-
-test "wrapText handles empty lines" {
-    const result = wrapText("a\n\nb", 80, 10);
-    try std.testing.expectEqualStrings("a", result[0].?);
-    try std.testing.expectEqualStrings("", result[1].?);
-    try std.testing.expectEqualStrings("b", result[2].?);
-}
-
-test "wrapText wraps long lines" {
-    const result = wrapText("hello world foo", 5, 10);
-    try std.testing.expectEqualStrings("hello", result[0].?);
-    try std.testing.expectEqualStrings("world", result[1].?);
-    try std.testing.expectEqualStrings("foo", result[2].?);
 }

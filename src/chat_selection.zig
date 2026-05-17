@@ -2,7 +2,6 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig").App;
-const ui = @import("ui.zig");
 
 const Allocator = std.mem.Allocator;
 const WidthMethod = vaxis.gwidth.Method;
@@ -86,6 +85,54 @@ pub const SelectionState = struct {
     }
 };
 
+pub const SelectionActionResult = struct {
+    copied_text: ?[]u8 = null,
+    status: ?[]const u8 = null,
+    clear_status: bool = false,
+    needs_redraw: bool = false,
+};
+
+pub const InputTextPoint = struct {
+    line: usize,
+    col: usize,
+};
+
+pub const InputSelectionBounds = struct {
+    start: InputTextPoint,
+    end: InputTextPoint,
+};
+
+pub const InputSelectionState = struct {
+    anchor: ?InputTextPoint = null,
+    focus: ?InputTextPoint = null,
+    dragging: bool = false,
+
+    pub fn clear(self: *InputSelectionState) void {
+        self.anchor = null;
+        self.focus = null;
+        self.dragging = false;
+    }
+
+    pub fn bounds(self: InputSelectionState, line_lengths: anytype) ?InputSelectionBounds {
+        const anchor = self.anchor orelse return null;
+        const focus = self.focus orelse return null;
+        const ordering = compareInputTextPoints(anchor, focus);
+        if (ordering == .eq) return null;
+
+        if (ordering == .lt) {
+            return .{
+                .start = anchor,
+                .end = exclusiveInputPoint(focus, line_lengths),
+            };
+        }
+
+        return .{
+            .start = focus,
+            .end = exclusiveInputPoint(anchor, line_lengths),
+        };
+    }
+};
+
 fn compareTextPoints(a: TextPoint, b: TextPoint) std.math.Order {
     if (a.line < b.line) return .lt;
     if (a.line > b.line) return .gt;
@@ -102,6 +149,62 @@ fn exclusivePoint(point: TextPoint, lines: []const RenderedLine) TextPoint {
     };
 }
 
+fn compareInputTextPoints(a: InputTextPoint, b: InputTextPoint) std.math.Order {
+    if (a.line < b.line) return .lt;
+    if (a.line > b.line) return .gt;
+    if (a.col < b.col) return .lt;
+    if (a.col > b.col) return .gt;
+    return .eq;
+}
+
+fn exclusiveInputPoint(point: InputTextPoint, line_lengths: anytype) InputTextPoint {
+    return .{
+        .line = point.line,
+        .col = @min(point.col + 1, line_lengths.lineLen(point.line)),
+    };
+}
+
+fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_lines]?[]const u8 {
+    var lines: [max_lines]?[]const u8 = .{null} ** max_lines;
+    if (width == 0) return lines;
+    var line_idx: usize = 0;
+
+    var rest = text;
+    while (rest.len > 0 and line_idx < max_lines) {
+        const nl_pos = std.mem.indexOfScalar(u8, rest, '\n');
+        const physical_line = if (nl_pos) |pos| rest[0..pos] else rest;
+        rest = if (nl_pos) |pos| rest[pos + 1 ..] else &.{};
+
+        if (physical_line.len == 0) {
+            lines[line_idx] = "";
+            line_idx += 1;
+            continue;
+        }
+
+        var start: usize = 0;
+        while (start < physical_line.len and line_idx < max_lines) {
+            var end = if (start + width < physical_line.len) start + width else physical_line.len;
+
+            if (end < physical_line.len) {
+                var best = end;
+                while (best > start) : (best -= 1) {
+                    if (physical_line[best] == ' ') {
+                        end = best;
+                        break;
+                    }
+                }
+            }
+
+            lines[line_idx] = physical_line[start..end];
+            line_idx += 1;
+            start = end;
+            if (start < physical_line.len and physical_line[start] == ' ') start += 1;
+        }
+    }
+
+    return lines;
+}
+
 pub fn buildRenderedLines(
     app: *App,
     allocator: Allocator,
@@ -114,7 +217,7 @@ pub fn buildRenderedLines(
     for (app.messages.items) |*msg| {
         if (msg.role == .notice) {
             const notice_wrap_w: usize = if (chat_width > 4) chat_width - 4 else 10;
-            const wrapped = ui.wrapText(msg.content, notice_wrap_w, 512);
+            const wrapped = wrapText(msg.content, notice_wrap_w, 512);
             for (wrapped) |maybe_line| {
                 const line = maybe_line orelse break;
                 const rendered = try allocator.dupe(u8, line);
@@ -146,7 +249,7 @@ pub fn buildRenderedLines(
                 });
                 // Wrapped thinking content
                 const wrap_w = if (chat_width > 4) chat_width - 4 else 10;
-                const wrapped = ui.wrapText(th, wrap_w, 512);
+                const wrapped = wrapText(th, wrap_w, 512);
                 for (wrapped) |maybe_line| {
                     const line = maybe_line orelse break;
                     const rendered = try allocator.dupe(u8, line);
@@ -181,7 +284,7 @@ pub fn buildRenderedLines(
             const prefix = "You: ";
             const prefix_len = @as(u16, @intCast(prefix.len));
             const user_wrap_w = if (chat_width > prefix_len + 3) chat_width - prefix_len - 3 else 10;
-            const wrapped = ui.wrapText(msg.content, user_wrap_w, 512);
+            const wrapped = wrapText(msg.content, user_wrap_w, 512);
 
             for (wrapped, 0..) |maybe_line, li| {
                 const line = maybe_line orelse break;
@@ -420,6 +523,63 @@ pub fn pointFromMouse(
     const line_col = if (col <= line.start_col) 0 else @min(col - line.start_col, line.display_cols - 1);
 
     return .{ .line = line_idx, .col = line_col };
+}
+
+pub fn handleMouseSelection(
+    allocator: Allocator,
+    mouse: vaxis.Mouse,
+    selection: *SelectionState,
+    chat_win: vaxis.Window,
+    scroll_offset: usize,
+    rendered_lines: []const RenderedLine,
+    width_method: WidthMethod,
+) !SelectionActionResult {
+    switch (mouse.type) {
+        .press => {
+            var result: SelectionActionResult = .{ .clear_status = true };
+            if (pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                selection.anchor = point;
+                selection.focus = point;
+                selection.dragging = true;
+                result.needs_redraw = true;
+            } else {
+                const had_selection = selection.anchor != null or selection.focus != null;
+                selection.clear();
+                result.needs_redraw = had_selection;
+            }
+            return result;
+        },
+        .drag => {
+            if (selection.dragging) {
+                if (pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                    selection.focus = point;
+                    return .{ .needs_redraw = true };
+                }
+            }
+        },
+        .release => {
+            if (selection.dragging) {
+                selection.dragging = false;
+                if (pointFromMouse(mouse, chat_win, scroll_offset, rendered_lines)) |point| {
+                    selection.focus = point;
+                }
+
+                if (selection.bounds(rendered_lines)) |bounds| {
+                    const text = try selectedText(allocator, rendered_lines, bounds, width_method);
+                    if (text.len == 0) {
+                        allocator.free(text);
+                        return .{ .status = " nothing selected ", .needs_redraw = true };
+                    }
+                    return .{ .copied_text = text, .needs_redraw = true };
+                }
+
+                return .{ .status = " drag to copy ", .needs_redraw = true };
+            }
+        },
+        else => {},
+    }
+
+    return .{};
 }
 
 pub fn selectionRangeForLine(bounds: SelectionBounds, line_idx: usize, display_cols: usize) ?LineSelectionRange {
