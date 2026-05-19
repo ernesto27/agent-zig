@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 
 pub const MAX_RESULTS = 10;
+pub const SKILL_PREFIX = "skills:";
 
 pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, exit };
 
@@ -35,6 +36,7 @@ pub const CommandPicker = struct {
     }
 
     pub fn deinit(self: *CommandPicker, alloc: std.mem.Allocator) void {
+        self.freeOwnedNames(alloc);
         self.query.deinit(alloc);
         self.results.deinit(alloc);
     }
@@ -42,9 +44,15 @@ pub const CommandPicker = struct {
     pub fn reset(self: *CommandPicker, alloc: std.mem.Allocator) void {
         self.active = false;
         self.query.clearRetainingCapacity();
+        self.freeOwnedNames(alloc);
         self.results.clearRetainingCapacity();
         self.selected = 0;
-        _ = alloc;
+    }
+
+    fn freeOwnedNames(self: *CommandPicker, alloc: std.mem.Allocator) void {
+        for (self.results.items) |cmd| {
+            if (std.mem.startsWith(u8, cmd.name, SKILL_PREFIX)) alloc.free(cmd.name);
+        }
     }
 
     pub fn updateFromInput(self: *CommandPicker, alloc: std.mem.Allocator, input: []const u8) !void {
@@ -65,6 +73,7 @@ pub const CommandPicker = struct {
     }
 
     fn refresh(self: *CommandPicker, alloc: std.mem.Allocator) !void {
+        self.freeOwnedNames(alloc);
         self.results.clearRetainingCapacity();
         self.selected = 0;
 
@@ -75,10 +84,13 @@ pub const CommandPicker = struct {
         }
 
         if (self.skill_registry) |registry| {
+            const prefix_matches = self.query.items.len > 0 and
+                std.ascii.indexOfIgnoreCase(SKILL_PREFIX, self.query.items) != null;
             for (registry.skills.items) |skill| {
-                if (matchesQuery(skill.name, self.query.items)) {
+                if (prefix_matches or matchesQuery(skill.name, self.query.items)) {
+                    const skillName = try std.fmt.allocPrint(alloc, "{s}{s}", .{ SKILL_PREFIX, skill.name });
                     try self.results.append(alloc, .{
-                        .name = skill.name,
+                        .name = skillName,
                         .description = skill.description,
                         .action = null,
                     });

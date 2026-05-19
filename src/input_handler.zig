@@ -370,10 +370,14 @@ fn handleEnter(ctx: *InputContext) !bool {
         if (ctx.command_picker.selectedCommand()) |cmd| {
             if (cmd.action) |action| {
                 result = try runSlashCommand(ctx, action);
-            } else if (ctx.app.skill_registry.find(cmd.name) != null) {
-                if (!ctx.app.is_loading) {
+            } else {
+                const bare_name = if (std.mem.startsWith(u8, cmd.name, command_picker_mod.SKILL_PREFIX))
+                    cmd.name[command_picker_mod.SKILL_PREFIX.len..]
+                else
+                    cmd.name;
+                if (ctx.app.skill_registry.find(bare_name) != null and !ctx.app.is_loading) {
                     clearInput(ctx);
-                    try ctx.app.skillCMD(cmd.name);
+                    try ctx.app.skillCMD(bare_name);
                     result = .send;
                 }
             }

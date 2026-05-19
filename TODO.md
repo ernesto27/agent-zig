@@ -6,7 +6,12 @@
 [x] - add provider deep seek
 [x] - when attach image show name for that in chat
 [x] - first ctrl-c should empty input box
-[] - show image in TUI 
+[x] - show image in TUI (PNG preview via Kitty protocol) 
+[] - show image preview for non-PNG formats (jpg, webp, etc.)
+[] - render attached text files preview in panel
+[] - send message with only attachments (empty input + attached files)
+[] - mouse wheel scroll for attachment preview panel
+[] - show skill command as skills:nameskill
 [] - export data to html
 [] - share session using gist
 [] - rename session
