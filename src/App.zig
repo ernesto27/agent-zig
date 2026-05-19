@@ -335,6 +335,7 @@ pub const App = struct {
     fn clearPendingAttachments(self: *Self) void {
         for (self.pending_attachments.items) |p| self.alloc.free(p);
         self.pending_attachments.clearRetainingCapacity();
+        self.preview_scroll = 0;
     }
 
     fn stripProposedPlanTags(self: *Self, input: []const u8) ![]u8 {

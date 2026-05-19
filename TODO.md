@@ -6,6 +6,14 @@
 [x] - add provider deep seek
 [x] - when attach image show name for that in chat
 [x] - first ctrl-c should empty input box
+[] - show image in TUI 
+[] - export data to html
+[] - share session using gist
+[] - rename session
+[] - add a system prompt
+[] - add command tu run as cli query
+[] - option to relace systemp prompt
+[] - add reload
 [] - when change session i want to update usage of context
 [] - context use KB does not work in deep seek
 [x] - create github actions ,  build TUI

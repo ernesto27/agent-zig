@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const App = @import("App.zig").App;
 const image_attach = @import("image_attach.zig");
+const attach_preview = @import("attach_preview.zig");
 const chat_selection = @import("chat_selection.zig");
 
 const Event = vaxis.Event;
@@ -838,5 +839,107 @@ pub fn renderStatus(
             .text = " ",
             .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
+    }
+}
+
+pub fn renderAttachPreview(
+    alloc: std.mem.Allocator,
+    win: vaxis.Window,
+    screen_w: u16,
+    preview_y: u16,
+    preview_h: u16,
+    app: *const App,
+    pending_images: []const attach_preview.PendingImage,
+    show_images: bool,
+    preview_scroll: usize,
+) void {
+    if (preview_h == 0 or app.pending_attachments.items.len == 0) return;
+    if (app.tool_confirmation.pending) return;
+    if (app.grep_status.pattern.len > 0) return;
+    if (app.glob_status.pattern.len > 0) return;
+    if (app.web_status.label.len > 0) return;
+
+    const box = win.child(.{
+        .x_off = 0,
+        .y_off = preview_y,
+        .width = screen_w,
+        .height = preview_h,
+        .border = .{ .where = .all, .glyphs = .single_rounded },
+    });
+
+    _ = box.printSegment(.{
+        .text = " Attachments ",
+        .style = .{
+            .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
+            .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+            .bold = true,
+        },
+    }, .{ .row_offset = 0, .col_offset = 1 });
+
+    const inner_h: u16 = if (box.height > 2) box.height - 2 else 0;
+    const lines = attach_preview.build(alloc, app.pending_attachments.items, show_images) catch return;
+
+    var row_index: usize = 0;
+    var row: u16 = 1;
+    for (lines) |line| {
+        const block_rows: u16 = switch (line.kind) {
+            .image => attach_preview.image_preview_rows,
+            else => 1,
+        };
+
+        if (row_index + block_rows <= preview_scroll) {
+            row_index += block_rows;
+            continue;
+        }
+
+        if (row > inner_h) break;
+        if (line.kind == .image) {
+            const remaining = inner_h - row + 1;
+            const skipped_rows = preview_scroll -| row_index;
+            const image_h = @min(attach_preview.image_preview_rows -| @as(u16, @intCast(skipped_rows)), remaining);
+            if (image_h == 0) {
+                row_index += attach_preview.image_preview_rows;
+                continue;
+            }
+            const image_win = box.child(.{
+                .x_off = 1,
+                .y_off = row,
+                .width = box.width -| 2,
+                .height = image_h,
+            });
+
+            if (attach_preview.findPendingImage(pending_images, line.text)) |pending_image| {
+                pending_image.image.draw(image_win, .{ .scale = .contain }) catch {
+                    _ = box.printSegment(.{
+                        .text = "   [image preview unavailable]",
+                        .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
+                    }, .{ .row_offset = row, .col_offset = 1 });
+                    row += 1;
+                    row_index += attach_preview.image_preview_rows;
+                    continue;
+                };
+            } else {
+                _ = box.printSegment(.{
+                    .text = "   [loading image preview]",
+                    .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
+                }, .{ .row_offset = row, .col_offset = 1 });
+                row += 1;
+                row_index += attach_preview.image_preview_rows;
+                continue;
+            }
+
+            row += image_h;
+            row_index += attach_preview.image_preview_rows;
+            continue;
+        }
+        const style: vaxis.Style = switch (line.kind) {
+            .header => .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+            .placeholder => .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
+            .content => .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .image => unreachable,
+        };
+        _ = box.printSegment(.{ .text = line.text, .style = style }, .{ .row_offset = row, .col_offset = 1 });
+        row += 1;
+        row_index += 1;
     }
 }

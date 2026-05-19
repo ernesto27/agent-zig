@@ -10,6 +10,42 @@ pub fn mimeFromPath(path: []const u8) ?[]const u8 {
     return null;
 }
 
+pub const ImageInfo = struct {
+    width: u16,
+    height: u16,
+};
+
+pub fn pngInfoFromPath(path: []const u8) !ImageInfo {
+    return (try readPngInfo(path)) orelse error.InvalidPngHeader;
+}
+
+pub fn canUseLocalPathPreview(path: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.fs.path.extension(path), ".png");
+}
+
+fn readPngInfo(path: []const u8) !?ImageInfo {
+    const file = if (std.fs.path.isAbsolute(path))
+        try std.fs.openFileAbsolute(path, .{})
+    else
+        try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var header: [24]u8 = undefined;
+    const n = try file.readAll(&header);
+    if (n < header.len) return null;
+
+    const signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+    if (!std.mem.eql(u8, header[0..8], &signature)) return null;
+    if (!std.mem.eql(u8, header[12..16], "IHDR")) return null;
+
+    const width = std.mem.readInt(u32, header[16..20], .big);
+    const height = std.mem.readInt(u32, header[20..24], .big);
+    return .{
+        .width = @intCast(@min(width, std.math.maxInt(u16))),
+        .height = @intCast(@min(height, std.math.maxInt(u16))),
+    };
+}
+
 /// Reads file at `path`, returns owned base64 bytes. Caller frees with `alloc`.
 pub fn encodeFileBase64(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     const max = 5 * 1024 * 1024;

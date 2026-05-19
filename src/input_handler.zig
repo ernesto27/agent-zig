@@ -119,6 +119,7 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
                 ctx.alloc.free(owned);
                 return;
             };
+            ctx.app.preview_scroll = std.math.maxInt(usize);
             ctx.app.needs_redraw = true;
             return;
         }
@@ -435,7 +436,7 @@ fn handleEnter(ctx: *InputContext) !bool {
             std.log.err("failed to read session: {}", .{err});
         }
         ctx.app.sessions.reset();
-    } else if (ctx.input.items.len > 0 and !ctx.app.is_loading) {
+    } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0) and !ctx.app.is_loading) {
         switch (ctx.app.mode) {
             .shell => |shell| {
                 const raw_input = ctx.input.items;
@@ -476,12 +477,16 @@ fn handleEnter(ctx: *InputContext) !bool {
                 const picked = ctx.at_picker.takePicked(alloc, ctx.input.items);
                 defer alloc.free(picked);
                 for (picked) |p| ctx.app.pending_attachments.append(alloc, p) catch alloc.free(p);
+                if (picked.len > 0) ctx.app.preview_scroll = std.math.maxInt(usize);
 
                 const user_text = if (ctx.app.pending_attachments.items.len == 0)
                     try alloc.dupe(u8, ctx.input.items)
                 else blk: {
                     const attachment_text = try std.mem.join(alloc, "\n", ctx.app.pending_attachments.items);
                     defer alloc.free(attachment_text);
+                    if (ctx.input.items.len == 0) {
+                        break :blk try alloc.dupe(u8, attachment_text);
+                    }
                     break :blk try std.mem.concat(alloc, u8, &.{ ctx.input.items, "\n", attachment_text });
                 };
                 try ctx.app.messages.append(alloc, .{ .role = .user, .content = user_text });

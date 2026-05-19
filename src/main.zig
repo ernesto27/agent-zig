@@ -13,6 +13,7 @@ const provider_picker_mod = @import("provider_picker.zig");
 
 const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
+const attach_preview = @import("attach_preview.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -128,6 +129,8 @@ pub fn main() !void {
     var selection: chat_selection.SelectionState = .{};
     var input_selection: chat_selection.InputSelectionState = .{};
     var clipboard_status: ?[]const u8 = null;
+    var pending_images = std.ArrayList(attach_preview.PendingImage){};
+    defer attach_preview.deinitPendingImages(alloc, &vx, &tty, &pending_images);
     var bracketed_paste = false;
     var paste_buf = std.ArrayList(u8){};
     defer paste_buf.deinit(alloc);
@@ -158,7 +161,7 @@ pub fn main() !void {
             },
             .mouse => |mouse| {
                 if (mouse.button == .wheel_up) {
-                    if (app.tool_confirmation.pending) {
+                    if (app.tool_confirmation.pending or app.pending_attachments.items.len > 0) {
                         if (app.preview_scroll > 0) app.preview_scroll -|= 3;
                     } else {
                         if (scroll_offset > 0) scroll_offset -|= 3;
@@ -166,7 +169,7 @@ pub fn main() !void {
                     }
                     app.needs_redraw = true;
                 } else if (mouse.button == .wheel_down) {
-                    if (app.tool_confirmation.pending) {
+                    if (app.tool_confirmation.pending or app.pending_attachments.items.len > 0) {
                         app.preview_scroll += 3;
                     } else {
                         scroll_offset += 3;
@@ -178,7 +181,7 @@ pub fn main() !void {
 
                     app.mutex.lock();
                     const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
-                    const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
+                    const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
                     const rendered_lines = chat_selection.buildRenderedLines(&app, mouse_arena.allocator(), if (vx.screen.width > 0) vx.screen.width else 1, vx.screen.width_method) catch &.{};
                     app.mutex.unlock();
 
@@ -280,6 +283,8 @@ pub fn main() !void {
         var win = vx.window();
         win.clear();
 
+        try attach_preview.syncPendingImages(alloc, &vx, &tty, &app, &pending_images);
+
         var frame_arena = std.heap.ArenaAllocator.init(alloc);
         defer frame_arena.deinit();
 
@@ -296,7 +301,16 @@ pub fn main() !void {
         ui.renderHeader(win, header);
 
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
-        const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h);
+        const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
+
+        if (!app.tool_confirmation.pending and app.pending_attachments.items.len > 0 and layout.preview_h > 0) {
+            const inner_preview_h: usize = if (layout.preview_h > 2) layout.preview_h - 2 else 0;
+            const preview_rows = attach_preview.totalContentRows(app.pending_attachments.items, vx.caps.kitty_graphics);
+            const max_preview_scroll = if (preview_rows > inner_preview_h) preview_rows - inner_preview_h else 0;
+            if (app.preview_scroll > max_preview_scroll) app.preview_scroll = max_preview_scroll;
+        } else if (!app.tool_confirmation.pending) {
+            app.preview_scroll = 0;
+        }
 
         // Chat area
         const chat_win = win.child(.{
@@ -337,6 +351,7 @@ pub fn main() !void {
 
         // Input box with border
         ui.renderTools(frame_arena.allocator(), win, vx.screen.width, layout.preview_y, layout.preview_h, &app, app.preview_scroll);
+        ui.renderAttachPreview(frame_arena.allocator(), win, vx.screen.width, layout.preview_y, layout.preview_h, &app, pending_images.items, vx.caps.kitty_graphics, app.preview_scroll);
 
         // @picker overlay — rendered above the input box
         if (at_picker.active and at_picker.results.items.len > 0) {
