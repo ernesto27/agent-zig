@@ -879,6 +879,14 @@ pub fn renderAttachPreview(
     const inner_h: u16 = if (box.height > 2) box.height - 2 else 0;
     const lines = attach_preview.build(alloc, app.pending_attachments.items, show_images) catch return;
 
+    var total_rows: usize = 0;
+    for (lines) |l| total_rows += switch (l.kind) {
+        .image => attach_preview.image_preview_rows,
+        else => 1,
+    };
+    const max_scroll: usize = if (total_rows > inner_h) total_rows - inner_h else 0;
+    const effective_scroll: usize = @min(preview_scroll, max_scroll);
+
     var row_index: usize = 0;
     var row: u16 = 1;
     for (lines) |line| {
@@ -887,7 +895,7 @@ pub fn renderAttachPreview(
             else => 1,
         };
 
-        if (row_index + block_rows <= preview_scroll) {
+        if (row_index + block_rows <= effective_scroll) {
             row_index += block_rows;
             continue;
         }
@@ -895,7 +903,7 @@ pub fn renderAttachPreview(
         if (row > inner_h) break;
         if (line.kind == .image) {
             const remaining = inner_h - row + 1;
-            const skipped_rows = preview_scroll -| row_index;
+            const skipped_rows = effective_scroll -| row_index;
             const image_h = @min(attach_preview.image_preview_rows -| @as(u16, @intCast(skipped_rows)), remaining);
             if (image_h == 0) {
                 row_index += attach_preview.image_preview_rows;

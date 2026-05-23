@@ -20,6 +20,7 @@ pub const PendingImage = struct {
 
 pub fn build(arena: std.mem.Allocator, paths: []const []u8, show_images: bool) ![]Line {
     var out = std.ArrayList(Line){};
+    var image_idx: u32 = 1;
 
     for (paths) |path| {
         const base = std.fs.path.basename(path);
@@ -27,15 +28,14 @@ pub fn build(arena: std.mem.Allocator, paths: []const []u8, show_images: bool) !
         try out.append(arena, .{ .text = header, .kind = .header });
 
         if (image_attach.mimeFromPath(path) != null) {
-            if (show_images) {
+            if (show_images and image_attach.canUseLocalPathPreview(path)) {
                 const owned_path = try arena.dupe(u8, path);
                 try out.append(arena, .{ .text = owned_path, .kind = .image });
-                continue;
+            } else {
+                const label = try std.fmt.allocPrint(arena, "   [Image #{d}]", .{image_idx});
+                try out.append(arena, .{ .text = label, .kind = .placeholder });
             }
-
-            const size = fileSize(path) catch 0;
-            const ph = try std.fmt.allocPrint(arena, "   [image: {s} — {d} bytes]", .{ base, size });
-            try out.append(arena, .{ .text = ph, .kind = .placeholder });
+            image_idx += 1;
             continue;
         }
 
@@ -46,16 +46,6 @@ pub fn build(arena: std.mem.Allocator, paths: []const []u8, show_images: bool) !
     }
 
     return out.toOwnedSlice(arena);
-}
-
-fn fileSize(path: []const u8) !u64 {
-    const f = if (std.fs.path.isAbsolute(path))
-        try std.fs.openFileAbsolute(path, .{})
-    else
-        try std.fs.cwd().openFile(path, .{});
-    defer f.close();
-    const stat = try f.stat();
-    return stat.size;
 }
 
 fn readPreviewLines(
@@ -100,7 +90,7 @@ pub fn requestedHeight(paths: []const []u8, show_images: bool) u16 {
 
 pub fn attachmentRows(path: []const u8, show_images: bool) u16 {
     return 1 + if (image_attach.mimeFromPath(path) != null)
-        if (show_images) image_preview_rows else 1
+        if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1
     else
         @as(u16, @intCast(max_lines_per_file));
 }
@@ -110,7 +100,7 @@ pub fn totalContentRows(paths: []const []u8, show_images: bool) usize {
     for (paths) |path| {
         rows += 1;
         if (image_attach.mimeFromPath(path) != null) {
-            rows += if (show_images) image_preview_rows else 1;
+            rows += if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1;
         } else {
             rows += max_lines_per_file;
         }
@@ -143,18 +133,23 @@ pub fn syncPendingImages(
         if (image_attach.mimeFromPath(path) == null) continue;
         if (hasCachedImage(pending_images.items, path)) continue;
 
-        const image = if (image_attach.canUseLocalPathPreview(path)) blk: {
-            const info = image_attach.pngInfoFromPath(path) catch break :blk vx.loadImage(alloc, tty.writer(), .{ .path = path }) catch continue;
-            break :blk vx.transmitLocalImagePath(
-                alloc,
-                tty.writer(),
-                path,
-                info.width,
-                info.height,
-                .file,
-                .png,
-            ) catch vx.loadImage(alloc, tty.writer(), .{ .path = path }) catch continue;
-        } else vx.loadImage(alloc, tty.writer(), .{ .path = path }) catch continue;
+        // zigimg's JPEG decoder panics on overflow for some real-world JPEGs
+        // (Frame.zig idct/dequantize). Only PNG goes through the in-process
+        // decoder via transmitLocalImagePath; other formats are skipped here
+        // — the file is still attached to the outgoing message, just no
+        // inline kitty-graphics preview.
+        if (!image_attach.canUseLocalPathPreview(path)) continue;
+
+        const info = image_attach.pngInfoFromPath(path) catch continue;
+        const image = vx.transmitLocalImagePath(
+            alloc,
+            tty.writer(),
+            path,
+            info.width,
+            info.height,
+            .file,
+            .png,
+        ) catch continue;
 
         const owned_path = try alloc.dupe(u8, path);
         pending_images.append(alloc, .{ .path = owned_path, .image = image }) catch {
