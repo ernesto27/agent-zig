@@ -51,6 +51,8 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         countCtrlPlusC += 1;
         ctx.show_exit.* = true;
         clearInput(ctx);
+        ctx.app.clearPendingAttachments();
+        ctx.at_picker.clearPicked(ctx.alloc);
 
         if (countCtrlPlusC == 2) {
             return true;
