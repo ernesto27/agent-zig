@@ -85,6 +85,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
     } else if (((key.codepoint == '\r' or key.codepoint == '\n') and key.mods.shift) or
         key.matches('j', .{ .ctrl = true }))
     {
+        resetExitState(ctx);
         try ctx.input.insert(ctx.alloc, ctx.cursor_pos, '\n');
         ctx.cursor_pos += 1;
     } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
@@ -95,6 +96,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
 
 pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
     if (text.len == 0) return;
+    resetExitState(ctx);
 
     if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(ctx.alloc, text);
@@ -136,6 +138,11 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 fn clearInput(ctx: *InputContext) void {
     ctx.input.clearRetainingCapacity();
     ctx.cursor_pos = 0;
+}
+
+fn resetExitState(ctx: *InputContext) void {
+    countCtrlPlusC = 0;
+    ctx.show_exit.* = false;
 }
 
 fn spawnLlmRequest(ctx: *InputContext) !void {
@@ -331,6 +338,7 @@ fn handleBackspace(ctx: *InputContext) !void {
 }
 
 fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
+    resetExitState(ctx);
     const alloc = ctx.alloc;
     if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(alloc, txt);
