@@ -10,6 +10,7 @@ const at_picker_mod = @import("at_picker.zig");
 const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
+const mcp_picker_mod = @import("mcp_picker.zig");
 
 const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
@@ -49,6 +50,9 @@ pub fn main() !void {
     var provider_picker = provider_picker_mod.ProviderPicker.init();
     defer provider_picker.deinit(alloc);
 
+    var mcp_picker = mcp_picker_mod.McpPicker.init();
+    defer mcp_picker.deinit(alloc);
+
     var show_exit: bool = false;
 
     var at_picker = at_picker_mod.AtPicker.init();
@@ -72,6 +76,7 @@ pub fn main() !void {
 
     var app = App.init(alloc, &llm_client);
     defer app.deinit();
+    app.loadMcpServers(config.mcpServers);
 
     var command_picker = command_picker_mod.CommandPicker.init(&app.skill_registry);
     defer command_picker.deinit(alloc);
@@ -110,6 +115,7 @@ pub fn main() !void {
         .command_picker = &command_picker,
         .model_picker = &model_picker,
         .provider_picker = &provider_picker,
+        .mcp_picker = &mcp_picker,
         .spinner_state = &spinner_state,
         .auto_scroll = &auto_scroll,
         .config = &config,
@@ -370,6 +376,10 @@ pub fn main() !void {
         // /provider picker overlay
         if (provider_picker.active) {
             provider_picker.render(win, vx.screen.width, vx.screen.height);
+        }
+
+        if (mcp_picker.active) {
+            mcp_picker.render(win, vx.screen.width, vx.screen.height);
         }
 
         // /resume session picker overlay

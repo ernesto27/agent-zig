@@ -3,6 +3,7 @@ const json_helpers = @import("json_helpers.zig");
 const message = @import("llm/message.zig");
 const skills = @import("skills.zig");
 const web = @import("tools/web.zig");
+const mcp_registry = @import("mcp/registry.zig");
 
 const log = std.log.scoped(.tools);
 
@@ -13,6 +14,7 @@ pub const ToolResult = struct {
 
 pub const Context = struct {
     skill_registry: ?*const skills.Registry = null,
+    mcp_registry: ?*mcp_registry.McpRegistry = null,
 };
 
 pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
@@ -290,14 +292,15 @@ const tool_specs = [_]ToolSpec{
 };
 
 pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const message.ToolDefinition {
-    const defs = try allocator.alloc(message.ToolDefinition, tool_specs.len);
-    for (tool_specs, 0..) |spec, i| {
+    var builtins: std.ArrayList(message.ToolDefinition) = .{};
+    try builtins.ensureTotalCapacity(allocator, tool_specs.len);
+    for (tool_specs) |spec| {
         const schema = try std.json.parseFromSlice(std.json.Value, allocator, spec.schema_json, .{});
         const description = if (std.mem.eql(u8, spec.name, "skill") and ctx.skill_registry != null) blk: {
             const available = try ctx.skill_registry.?.buildAvailableSkillsMarkdown(allocator);
             break :blk try std.mem.concat(allocator, u8, &.{ spec.description, "\n\n", available });
         } else spec.description;
-        defs[i] = .{
+        try builtins.append(allocator, .{
             .name = spec.name,
             .description = description,
             .input_schema = .{
@@ -305,13 +308,29 @@ pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const messa
                 .properties = schema.value.object.get("properties") orelse .null,
                 .required = spec.required,
             },
-        };
+        });
     }
 
-    return defs;
+    if (ctx.mcp_registry) |reg| {
+        const mcp_defs = reg.collectTools(allocator) catch |err| blk: {
+            log.warn("collectTools failed: {}", .{err});
+            break :blk &[_]message.ToolDefinition{};
+        };
+        for (mcp_defs) |d| try builtins.append(allocator, d);
+    }
+
+    return builtins.toOwnedSlice(allocator);
 }
 
 pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8, input: std.json.Value) ToolResult {
+    // MCP tools are prefixed `mcp__<server>__<tool>`. routeCall returns null
+    // for non-MCP names so the built-in dispatch below runs unchanged.
+    if (ctx.mcp_registry) |reg| {
+        if (reg.routeCall(allocator, tool_name, input)) |r| {
+            return .{ .content = r.content, .is_error = r.is_error };
+        }
+    }
+
     if (std.mem.eql(u8, tool_name, "read_file")) {
         return readFile(allocator, input);
     }

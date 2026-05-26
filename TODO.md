@@ -7,17 +7,17 @@
 [x] - when attach image show name for that in chat
 [x] - first ctrl-c should empty input box
 [x] - show image in TUI (PNG preview via Kitty protocol) 
-[] - show image preview for non-PNG formats (jpg, webp, etc.)
-[] - render attached text files preview in panel
+[x] - show image preview for non-PNG formats (jpg, webp, etc.)
+[x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
-[] - show skill command as skills:nameskill
+[x] - show skill command as skills:nameskill
 [] - export data to html
 [] - share session using gist
 [] - rename session
-[] - add a system prompt
+[x] - add a system prompt
 [] - add command tu run as cli query
-[] - option to relace systemp prompt
+[] - option to replace systemp prompt
 [] - add reload
 [] - when change session i want to update usage of context
 [] - context use KB does not work in deep seek

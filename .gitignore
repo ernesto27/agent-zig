@@ -16,3 +16,5 @@ zig-pkg
 .opencode/commands/dummy.md
 .opencode/commands/review-component.md
 .opencode/commands/test.md
+.mcp.json
+opencode.json

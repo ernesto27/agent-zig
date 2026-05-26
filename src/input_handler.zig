@@ -6,6 +6,7 @@ const at_picker_mod = @import("at_picker.zig");
 const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
+const mcp_picker_mod = @import("mcp_picker.zig");
 const ui = @import("ui.zig");
 const image_attach = @import("image_attach.zig");
 
@@ -24,6 +25,7 @@ pub const InputContext = struct {
     command_picker: *command_picker_mod.CommandPicker,
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
+    mcp_picker: *mcp_picker_mod.McpPicker,
     spinner_state: *ui.SpinnerState,
     auto_scroll: *bool,
     config: *agent.config.Config,
@@ -64,6 +66,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.command_picker.active or
             ctx.model_picker.active or
             ctx.provider_picker.active or
+            ctx.mcp_picker.active or
             ctx.app.sessions.active;
         if (!modal_open) ctx.app.toggleMode();
     } else if (key.matches(vaxis.Key.escape, .{})) {
@@ -195,6 +198,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             try ctx.app.initCMD();
             return .send;
         },
+        .mcp => try ctx.mcp_picker.open(ctx.alloc, &ctx.app.mcp_registry, ctx.app.mcp_config),
         .exit => return .quit,
     }
     return .none;
@@ -213,6 +217,8 @@ fn handleEscape(ctx: *InputContext) !void {
         ctx.model_picker.reset(ctx.alloc);
     } else if (ctx.provider_picker.active) {
         ctx.provider_picker.reset(ctx.alloc);
+    } else if (ctx.mcp_picker.active) {
+        if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset(ctx.alloc);
     } else if (ctx.app.sessions.active) {
         ctx.app.sessions.reset();
     } else switch (ctx.app.mode) {
@@ -238,6 +244,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                 if (ctx.model_picker.selected > 0) ctx.model_picker.selected -= 1;
             } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
                 if (ctx.provider_picker.selected > 0) ctx.provider_picker.selected -= 1;
+            } else if (ctx.mcp_picker.active) {
+                ctx.mcp_picker.moveUp();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected > 0) {
                     ctx.app.sessions.selected -= 1;
@@ -277,6 +285,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
             } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
                 if (ctx.provider_picker.selected + 1 < model_picker_mod.providers.len)
                     ctx.provider_picker.selected += 1;
+            } else if (ctx.mcp_picker.active) {
+                ctx.mcp_picker.moveDown();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected + 1 < ctx.app.sessions.entries.items.len) {
                     ctx.app.sessions.selected += 1;
@@ -424,6 +434,8 @@ fn handleEnter(ctx: *InputContext) !bool {
         }
         agent.config.save(alloc, ctx.config.*) catch {};
         ctx.model_picker.reset(alloc);
+    } else if (ctx.mcp_picker.active) {
+        ctx.mcp_picker.enter();
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
         ctx.provider_picker.phase = .key_input;
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {

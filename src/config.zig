@@ -12,6 +12,7 @@ pub const Config = struct {
     anthropic: ProviderConfig = .{ .baseUrl = "https://api.anthropic.com" },
     openai: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
     deepseek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
+    mcpServers: std.json.Value = .null,
 
     pub fn forProvider(self: *Config, name: []const u8) ?*ProviderConfig {
         if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;

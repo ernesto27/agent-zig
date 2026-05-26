@@ -78,6 +78,13 @@ pub const App = struct {
     llm_client: *agent.llm.Client,
     pending_attachments: std.ArrayList([]u8),
     skill_registry: agent.skills.Registry = .{},
+    mcp_registry: agent.mcp.registry.McpRegistry,
+    // Borrowed view of config.mcpServers — its arena outlives App (owned by
+    // main.zig's parsed_config). Used by /mcp to show "configured" vs "live".
+    mcp_config: std.json.Value = .null,
+    // Thread running the (slow) MCP server spawn + initialize. Joined on
+    // App.deinit so we don't leak the thread or race with shutdownAll.
+    mcp_load_thread: ?std.Thread = null,
     system_prompt: agent.system_prompt.SystemPrompt = .{},
     sessions: sessions.Sessions = .{},
     init_cmd: init_mod.Init = .{},
@@ -125,9 +132,36 @@ pub const App = struct {
             .llm_client = client,
             .pending_attachments = .{},
             .skill_registry = skill_registry,
+            .mcp_registry = agent.mcp.registry.McpRegistry.init(alloc),
             .system_prompt = sp,
             .sessions = sess,
         };
+    }
+
+    /// Spawn and initialize every configured MCP server. Called from main
+    /// after `App.init` because the config isn't available to `init`.
+    /// Failures are logged per-server and don't block startup.
+    pub fn loadMcpServers(self: *Self, mcp_servers: std.json.Value) void {
+        // Store the config view immediately so /mcp can show "configured"
+        // entries (with status=loading) before the loader thread finishes.
+        self.mcp_config = mcp_servers;
+        self.mcp_load_thread = std.Thread.spawn(.{}, mcpLoadEntry, .{self}) catch |err| blk: {
+            log.err("loadMcpServers: spawn thread failed: {}", .{err});
+            // Fallback: run inline so behavior degrades to "blocks startup"
+            // instead of "no MCP at all".
+            self.mcp_registry.loadFromConfig(mcp_servers) catch {};
+            break :blk null;
+        };
+    }
+
+    fn mcpLoadEntry(self: *Self) void {
+        self.mcp_registry.loadFromConfig(self.mcp_config) catch |err| {
+            log.err("mcpLoadEntry: {}", .{err});
+        };
+        // Nudge the UI so the next render reflects "loading → ready".
+        self.mutex.lock();
+        self.needs_redraw = true;
+        self.mutex.unlock();
     }
 
     pub fn getElapsedSeconds(self: *Self) ?usize {
@@ -279,6 +313,10 @@ pub const App = struct {
         self.web_status.deinit(self.alloc);
         self.pending_attachments.deinit(self.alloc);
         self.skill_registry.deinit(self.alloc);
+        // Wait for the MCP loader thread before shutting down the registry,
+        // otherwise shutdownAll() would race with in-flight spawn/initialize.
+        if (self.mcp_load_thread) |t| t.join();
+        self.mcp_registry.shutdownAll();
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
     }
@@ -586,7 +624,10 @@ pub const App = struct {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
-        const tool_ctx = agent.tools.Context{ .skill_registry = &self.skill_registry };
+        const tool_ctx = agent.tools.Context{
+            .skill_registry = &self.skill_registry,
+            .mcp_registry = &self.mcp_registry,
+        };
         const tool_defs = agent.tools.getDefinitions(arena_alloc, tool_ctx) catch &.{};
 
         const max_iterations = 10;
@@ -742,17 +783,44 @@ pub const App = struct {
                     const needs_confirmation =
                         std.mem.eql(u8, tool_use.name, "write_file") or
                         std.mem.eql(u8, tool_use.name, "edit_file") or
-                        std.mem.eql(u8, tool_use.name, "bash");
+                        std.mem.eql(u8, tool_use.name, "bash") or
+                        std.mem.startsWith(u8, tool_use.name, "mcp__");
 
                     if (needs_confirmation) {
                         const is_bash = std.mem.eql(u8, tool_use.name, "bash");
-                        const fp = if (is_bash)
+                        const is_mcp = std.mem.startsWith(u8, tool_use.name, "mcp__");
+
+                        // For MCP tools we don't have a single "file_path"
+                        // or "content" — synthesize a header (server.tool)
+                        // and a pretty-printed JSON of the input so the user
+                        // can actually see what's about to run.
+                        var mcp_fp: []const u8 = "";
+                        var mcp_body: []const u8 = "";
+                        if (is_mcp) {
+                            const rest = tool_use.name["mcp__".len..];
+                            if (std.mem.indexOf(u8, rest, "__")) |sep| {
+                                mcp_fp = std.fmt.allocPrint(arena_alloc, "{s}.{s}", .{ rest[0..sep], rest[sep + 2 ..] }) catch tool_use.name;
+                            } else {
+                                mcp_fp = tool_use.name;
+                            }
+                            const json_pretty = std.json.Stringify.valueAlloc(arena_alloc, tool_use.input, .{ .whitespace = .indent_2 }) catch "";
+                            // Prepend the tool's MCP-advertised description
+                            // so the user knows what the call will actually
+                            // do before approving.
+                            if (self.mcp_registry.findDescriptionForPrefixed(tool_use.name)) |desc| {
+                                mcp_body = std.fmt.allocPrint(arena_alloc, "{s}\n\n{s}", .{ desc, json_pretty }) catch json_pretty;
+                            } else {
+                                mcp_body = json_pretty;
+                            }
+                        }
+
+                        const fp = if (is_mcp) mcp_fp else if (is_bash)
                             agent.tools.getStringField(tool_use.input, "command") orelse ""
                         else
                             agent.tools.getStringField(tool_use.input, "file_path") orelse "";
-                        const cnt = agent.tools.getStringField(tool_use.input, "content") orelse "";
-                        const old_s = agent.tools.getStringField(tool_use.input, "old_string") orelse "";
-                        const new_s = agent.tools.getStringField(tool_use.input, "new_string") orelse "";
+                        const cnt = if (is_mcp) mcp_body else (agent.tools.getStringField(tool_use.input, "content") orelse "");
+                        const old_s = if (is_mcp) "" else (agent.tools.getStringField(tool_use.input, "old_string") orelse "");
+                        const new_s = if (is_mcp) "" else (agent.tools.getStringField(tool_use.input, "new_string") orelse "");
 
                         self.mutex.lock();
                         self.tool_confirmation.pending = true;

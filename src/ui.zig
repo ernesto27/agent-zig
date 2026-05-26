@@ -582,6 +582,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
 
     const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
     const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
+    const is_mcp = std.mem.startsWith(u8, app.tool_confirmation.tool_name, "mcp__");
     const is_web_preview = if (app.tool_confirmation.pending)
         std.mem.eql(u8, app.tool_confirmation.tool_name, "web_search") or std.mem.eql(u8, app.tool_confirmation.tool_name, "web_extract")
     else
@@ -605,7 +606,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
     });
 
     const title = std.fmt.allocPrint(alloc, " {s} {s} ", .{
-        if (is_bash) "Run:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
+        if (is_bash) "Run:" else if (is_mcp) "MCP Tool:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
         if (is_search_preview) preview_path else app.tool_confirmation.file_path,
     }) catch " Preview ";
     _ = preview_win.printSegment(.{
@@ -665,6 +666,21 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
                 _ = preview_win.printSegment(.{
                     .text = line,
                     .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
+                }, .{ .row_offset = prow, .col_offset = 1 });
+                prow += 1;
+            }
+            line_idx += 1;
+        }
+    } else if (is_mcp) {
+        var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
+        var line_idx: usize = 0;
+        var prow: u16 = 1;
+        while (line_iter.next()) |line| {
+            if (prow >= preview_content_end) break;
+            if (line_idx >= preview_scroll) {
+                _ = preview_win.printSegment(.{
+                    .text = line,
+                    .style = .{ .fg = .{ .rgb = .{ 0xA0, 0xD0, 0xFF } } },
                 }, .{ .row_offset = prow, .col_offset = 1 });
                 prow += 1;
             }

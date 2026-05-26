@@ -10,6 +10,11 @@ pub const tools = @import("tools.zig");
 pub const system_prompt = @import("system_prompt.zig");
 pub const skills = @import("skills.zig");
 pub const utils = @import("utils.zig");
+pub const mcp = struct {
+    pub const protocol = @import("mcp/protocol.zig");
+    pub const client = @import("mcp/client.zig");
+    pub const registry = @import("mcp/registry.zig");
+};
 
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you
