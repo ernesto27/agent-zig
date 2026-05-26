@@ -63,6 +63,42 @@ hs doing
 [] - save conversations to resume
 [] - add arena options to have two models or more doint same task in paraller
 
+## MCP - missing features
+
+// transport
+[] - mcp: add streamable HTTP / SSE transport (needed for hosted servers: Linear, GitHub, Notion)
+[] - mcp: support Content-Length framed messages (some servers emit LSP-style headers, not bare newlines)
+
+// protocol correctness
+[] - mcp: fix protocolVersion — use a real spec date (2024-11-05 / 2025-03-26 / 2025-06-18)
+[] - mcp: store negotiated protocolVersion and branch on capabilities per version
+
+// capabilities
+[] - mcp: declare roots capability in initialize (filesystem servers expect workspace dirs)
+[] - mcp: implement prompts/list and resources/list (many servers expose these, not just tools)
+
+// notifications
+[] - mcp: handle notifications/tools/list_changed — invalidate cached_tools instead of re-listing every turn
+[] - mcp: handle notifications/progress for long-running tool calls
+[] - mcp: send notifications/cancelled when user hits Esc during an MCP tool call
+
+// tool call quality
+[] - mcp: surface non-text content parts (image, resource, audio) instead of [image content omitted]
+[] - mcp: read structuredContent field (added in spec 2025-06-18)
+[] - mcp: add per-request timeout on requestRaw read loop (wedged server hangs agent thread forever)
+
+// config & lifecycle
+[] - mcp: support env var overrides per server in config (e.g. GITHUB_TOKEN, LINEAR_API_KEY)
+[] - mcp: set cwd for spawned child process (relative paths in args currently land in agent cwd)
+[] - mcp: auto-restart crashed servers with backoff instead of leaving dead entry in clients map
+[] - mcp: kill() server in shutdown if close-stdin + wait() takes too long
+
+// error handling
+[] - mcp: surface RPC error code+message to the model (not just log it as error.RpcError)
+
+// buffer / correctness
+[] - mcp: grow stdout_buf dynamically — 64 KB limit breaks servers that emit large tool results or schemas
+
 // read file claude.md or agents.md
 
 

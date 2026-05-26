@@ -10,9 +10,10 @@ Terminal-based AI coding agent written in Zig.
 - **Tool system** with approve/deny/accept-all confirmation UI:
   - `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`
   - `web_search`, `web_extract` (Tavily — requires API key)
+- **MCP support** (stdio, tools-only): spawn third-party Model Context Protocol servers (filesystem, git, context7, …); their tools appear to the LLM as `mcp__<server>__<tool>` and route through the same confirmation gate as `bash`
 - **Skills**: Load custom agent skills from `.agents/skills/`
 - **Modes**: `build` and `plan` modes with tailored system prompts
-- **Slash commands**: `/provider`, `/model`, `/clear`, `/resume`, `/init`, `/exit` + loaded skills
+- **Slash commands**: `/provider`, `/model`, `/mcp`, `/clear`, `/resume`, `/init`, `/exit` + loaded skills
 - **@ file picker**: Attach files inline to messages
 - **Session management**: Save and resume past conversations
 - **Markdown rendering**: Styled output in the chat area
@@ -61,3 +62,25 @@ zig build test -Dtavily-api-key="tvly-..."
 ```
 
 If the flag is omitted, Tavily-backed tools return a missing API key error at runtime.
+
+## MCP servers
+
+Spawn third-party MCP (Model Context Protocol) servers and use their tools alongside built-ins.
+
+- stdio transport, `tools` capability
+- multi-server (`fs`, `git`, `context7`, …) — each tool exposed as `mcp__<server>__<tool>`
+- `/mcp` slash command to browse servers and their tool lists
+- per-call approve/deny/accept-all confirmation modal (same gate as `bash`)
+- background loading (TUI never blocks during `npx` cold starts)
+
+Example `~/.config/agent-zig/config.json`:
+
+```json
+"mcpServers": {
+  "fs":       { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/me/project"] },
+  "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+  "git":      { "command": "uvx", "args": ["mcp-server-git", "--repository", "/home/me/project"] }
+}
+```
+
+Limits: no HTTP transport, no resources/prompts, no per-call timeout, no `env` override yet.

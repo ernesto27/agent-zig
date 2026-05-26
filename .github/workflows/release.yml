@@ -1,7 +1,9 @@
-name: Release (rolling)
+name: Release
 
 on:
   push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -20,7 +22,7 @@ jobs:
       - uses: marvinpinto/action-automatic-releases@latest
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          automatic_release_tag: latest
-          prerelease: true
-          title: "Latest Build"
+          automatic_release_tag: ${{ github.ref_name }}
+          prerelease: false
+          title: "Release ${{ github.ref_name }}"
           files: agent-zig-linux-x86_64.tar.gz
