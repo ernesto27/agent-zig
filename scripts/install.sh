@@ -22,8 +22,6 @@ case "$ARCH" in
     ;;
 esac
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/latest/${ASSET}"
-
 # --- Downloader ---
 if command -v curl &>/dev/null; then
   DOWNLOAD="curl -fsSL"
@@ -31,6 +29,19 @@ elif command -v wget &>/dev/null; then
   DOWNLOAD="wget -qO-"
 else
   echo "error: curl or wget is required" >&2
+  exit 1
+fi
+
+# --- Resolve latest release asset via GitHub API ---
+API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+echo "Resolving latest release for ${REPO} ..."
+DOWNLOAD_URL="$($DOWNLOAD "$API_URL" \
+  | grep -oE "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${ASSET}\"" \
+  | head -n1 \
+  | sed -E 's/.*"(https:[^"]+)".*/\1/')"
+
+if [ -z "$DOWNLOAD_URL" ]; then
+  echo "error: could not find asset '${ASSET}' in latest release of ${REPO}" >&2
   exit 1
 fi
 
