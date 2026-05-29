@@ -18,7 +18,7 @@ pub const McpPicker = struct {
     selected: usize = 0,
     server_names: std.ArrayList([]const u8) = .{},
     entered_server: ?[]const u8 = null,
-    mcp_registry: ?*const agent.mcp.registry.McpRegistry = null,
+    mcp_registry: ?*agent.mcp.registry.McpRegistry = null,
     mcp_config: std.json.Value = .null,
     count_text_buf: [MAX_SERVERS][COUNT_TEXT_CAP]u8 = undefined,
     title_buf: [64]u8 = undefined,
@@ -34,7 +34,7 @@ pub const McpPicker = struct {
     pub fn open(
         self: *McpPicker,
         alloc: std.mem.Allocator,
-        registry: *const agent.mcp.registry.McpRegistry,
+        registry: *agent.mcp.registry.McpRegistry,
         cfg: std.json.Value,
     ) !void {
         self.mcp_registry = registry;
@@ -115,7 +115,7 @@ pub const McpPicker = struct {
     fn currentTools(self: *const McpPicker) ?[]const agent.mcp.client.Tool {
         const name = self.entered_server orelse return null;
         const reg = self.mcp_registry orelse return null;
-        const client = reg.clients.get(name) orelse return null;
+        const client = reg.clientFor(name) orelse return null;
         return client.cached_tools;
     }
 
@@ -140,22 +140,28 @@ pub const McpPicker = struct {
         var items_buf: [MAX_SERVERS]modal_list.Item = undefined;
 
         const reg = self.mcp_registry;
-        const ready = if (reg) |r| r.isReady() else false;
 
         const n = @min(self.server_names.items.len, MAX_SERVERS);
         for (self.server_names.items[0..n], 0..) |name, i| {
             var badge: ?modal_list.Badge = null;
             var secondary: ?[]const u8 = null;
 
-            if (!ready) {
-                badge = .{ .text = "loading…", .fg = status_loading_fg };
-            } else if (reg) |r| {
-                if (r.clients.get(name)) |c| {
-                    badge = .{ .text = "connected", .fg = status_connected_fg };
-                    secondary = std.fmt.bufPrint(&self.count_text_buf[i], "{d} tool(s)", .{c.cached_tools.len}) catch null;
-                } else {
-                    badge = .{ .text = "failed", .fg = status_failed_fg };
+            // Each server reports its own state, so a still-connecting or failed
+            // HTTP server shows its status while connected stdio servers show
+            // "connected" right away — no shared all-or-nothing gate.
+            if (reg) |r| {
+                switch (r.serverState(name)) {
+                    .loading => badge = .{ .text = "loading…", .fg = status_loading_fg },
+                    .failed => badge = .{ .text = "failed", .fg = status_failed_fg },
+                    .connected => {
+                        badge = .{ .text = "connected", .fg = status_connected_fg };
+                        if (r.clientFor(name)) |c| {
+                            secondary = std.fmt.bufPrint(&self.count_text_buf[i], "{d} tool(s)", .{c.cached_tools.len}) catch null;
+                        }
+                    },
                 }
+            } else {
+                badge = .{ .text = "loading…", .fg = status_loading_fg };
             }
 
             items_buf[i] = .{

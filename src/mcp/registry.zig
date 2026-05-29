@@ -4,10 +4,16 @@
 //! comes back with that prefix, routeCall splits it, looks up the client,
 //! and forwards via JSON-RPC tools/call. Names without the prefix return
 //! null so the caller falls through to the built-in dispatcher.
+//!
+//! Each configured server connects on its OWN loader thread, so a slow or
+//! hanging server (e.g. an unreachable hosted HTTP endpoint) never blocks the
+//! others — stdio servers like context7 come online independently of a stuck
+//! HTTP one. A mutex guards `clients`/`states`; every reader (collectTools,
+//! routeCall, the /mcp picker) locks it so it never observes a half-inserted
+//! entry while a loader thread is mid-mutation.
 
 const std = @import("std");
 const client_mod = @import("client.zig");
-const protocol = @import("protocol.zig");
 const message = @import("../llm/message.zig");
 const json_helpers = @import("../json_helpers.zig");
 
@@ -20,129 +26,160 @@ pub const ToolResult = struct {
     is_error: bool = false,
 };
 
+/// Per-server lifecycle, surfaced to the /mcp picker.
+pub const ServerState = enum { loading, connected, failed };
+
+/// Heap-allocated context handed to each loader thread. Freed by the thread.
+const LoadCtx = struct {
+    reg: *McpRegistry,
+    name: []const u8, // borrowed from the config json.Value (outlives the registry)
+    cfg: std.json.Value,
+};
+
 pub const McpRegistry = struct {
     allocator: std.mem.Allocator,
+    /// Guards `clients` and `states`. Held only briefly around map access —
+    /// never across a spawn/connect/RPC call.
+    mutex: std.Thread.Mutex = .{},
+    /// Connected servers, by name. Populated incrementally as each loader
+    /// thread finishes. Keys owned by this registry's allocator.
     clients: std.StringHashMapUnmanaged(*McpClient) = .{},
-    /// Set to true once `loadFromConfig` returns. Until then, the clients
-    /// map may be mid-mutation by the loader thread — readers (collectTools,
-    /// routeCall, /mcp) MUST consult `isReady()` before touching `clients`.
-    ready: std.atomic.Value(bool) = .{ .raw = false },
+    /// Lifecycle state for every configured server (loading/connected/failed).
+    /// Keys owned by this registry's allocator.
+    states: std.StringHashMapUnmanaged(ServerState) = .{},
+    /// One loader thread per configured server; joined in shutdownAll.
+    load_threads: std.ArrayList(std.Thread) = .{},
 
     pub fn init(allocator: std.mem.Allocator) McpRegistry {
         return .{ .allocator = allocator };
     }
 
-    pub fn isReady(self: *const McpRegistry) bool {
-        return self.ready.load(.acquire);
+    /// Lifecycle state for `name`; `.loading` if not yet recorded.
+    pub fn serverState(self: *McpRegistry, name: []const u8) ServerState {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.states.get(name) orelse .loading;
+    }
+
+    /// Connected client for `name`, or null. Locks so it never races a loader
+    /// mid-insert. The returned pointer is stable for the life of the process.
+    pub fn clientFor(self: *McpRegistry, name: []const u8) ?*McpClient {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.clients.get(name);
+    }
+
+    fn setState(self: *McpRegistry, name: []const u8, state: ServerState) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.states.getPtr(name)) |s| {
+            s.* = state;
+        } else {
+            const key = self.allocator.dupe(u8, name) catch return;
+            self.states.put(self.allocator, key, state) catch self.allocator.free(key);
+        }
     }
 
     /// Look up a tool's description from the cached catalog, used by the
     /// confirmation modal. Splits a prefixed `mcp__<server>__<tool>` name
     /// internally so callers pass the same string the LLM emitted.
-    pub fn findDescriptionForPrefixed(self: *const McpRegistry, prefixed_name: []const u8) ?[]const u8 {
-        if (!self.isReady()) return null;
+    pub fn findDescriptionForPrefixed(self: *McpRegistry, prefixed_name: []const u8) ?[]const u8 {
         if (!std.mem.startsWith(u8, prefixed_name, "mcp__")) return null;
         const rest = prefixed_name[5..];
         const sep = std.mem.indexOf(u8, rest, "__") orelse return null;
         const server = rest[0..sep];
         const tool = rest[sep + 2 ..];
-        const c = self.clients.get(server) orelse return null;
+        const c = self.clientFor(server) orelse return null;
         return c.findToolDescription(tool);
     }
 
-    /// Spawn each configured server. Servers that fail to spawn or
-    /// initialize are logged and skipped — failures do not block other
-    /// servers. Sets `ready=true` on return.
-    ///
-    /// IMPORTANT: this call is BLOCKING. First-run `npx`/`uvx` invocations
-    /// download server packages; that can take 10-30 seconds. Run this on
-    /// a background thread (see `App.loadMcpServers`) so the TUI is not
-    /// frozen during startup.
+    /// Spawn one loader thread per configured server and return. Cheap and
+    /// non-blocking: the actual connect/initialize (which can be slow or hang
+    /// for hosted HTTP servers) happens on the per-server threads, so no single
+    /// server can stall the others. Safe to call from `App.loadMcpServers`'s
+    /// background thread.
     pub fn loadFromConfig(self: *McpRegistry, mcp_servers: std.json.Value) !void {
-        defer self.ready.store(true, .release);
         if (mcp_servers != .object) return;
         var it = mcp_servers.object.iterator();
         while (it.next()) |entry| {
             const name = entry.key_ptr.*;
             const cfg = entry.value_ptr.*;
 
-            const command = json_helpers.getStringField(cfg, "command") orelse {
-                log.warn("mcpServers.{s}: missing 'command', skipping", .{name});
+            // Pre-seed lifecycle state so the picker shows "loading…" right away.
+            const key = self.allocator.dupe(u8, name) catch continue;
+            self.mutex.lock();
+            const put_ok = if (self.states.put(self.allocator, key, .loading)) |_| true else |_| false;
+            self.mutex.unlock();
+            if (!put_ok) {
+                self.allocator.free(key);
                 continue;
-            };
-
-            // Collect args (optional, empty if missing).
-            var args_list: std.ArrayList([]const u8) = .{};
-            defer args_list.deinit(self.allocator);
-            if (json_helpers.getField(cfg, "args")) |a| if (a == .array) {
-                for (a.array.items) |item| {
-                    if (item == .string) try args_list.append(self.allocator, item.string);
-                }
-            };
-
-            const c = McpClient.spawn(self.allocator, name, command, args_list.items) catch |err| {
-                log.err("mcpServers.{s}: spawn failed: {}", .{ name, err });
-                continue;
-            };
-            c.initialize() catch |err| {
-                log.err("mcpServers.{s}: initialize failed: {}", .{ name, err });
-                c.shutdown();
-                continue;
-            };
-
-            // Prime the cached tool catalog so /mcp and the confirmation
-            // modal can render names/descriptions before the first LLM turn
-            // refreshes it via collectTools.
-            if (c.refreshTools()) {
-                log.info("mcpServers.{s}: {d} tool(s)", .{ name, c.cached_tools.len });
-            } else |err| {
-                log.warn("mcpServers.{s}: initial tools/list failed: {}", .{ name, err });
             }
 
-            const name_owned = self.allocator.dupe(u8, name) catch {
-                c.shutdown();
+            const ctx = self.allocator.create(LoadCtx) catch continue;
+            ctx.* = .{ .reg = self, .name = name, .cfg = cfg };
+            const t = std.Thread.spawn(.{}, loadOne, .{ctx}) catch |err| {
+                log.err("mcpServers.{s}: loader spawn failed: {}", .{ name, err });
+                self.allocator.destroy(ctx);
+                self.setState(name, .failed);
                 continue;
             };
-            self.clients.put(self.allocator, name_owned, c) catch {
-                self.allocator.free(name_owned);
-                c.shutdown();
-                continue;
-            };
-            log.info("mcpServers.{s}: ready", .{name});
+            self.load_threads.append(self.allocator, t) catch t.detach();
         }
     }
 
     pub fn shutdownAll(self: *McpRegistry) void {
-        var it = self.clients.iterator();
-        while (it.next()) |entry| {
+        // Join loaders first so none touches the maps after we free them. A
+        // loader stuck in a hung connect blocks here — same exit behavior as
+        // before, but at runtime it never blocked the other servers.
+        for (self.load_threads.items) |t| t.join();
+        self.load_threads.deinit(self.allocator);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var cit = self.clients.iterator();
+        while (cit.next()) |entry| {
             entry.value_ptr.*.shutdown();
             self.allocator.free(entry.key_ptr.*);
         }
         self.clients.deinit(self.allocator);
+
+        var sit = self.states.iterator();
+        while (sit.next()) |entry| self.allocator.free(entry.key_ptr.*);
+        self.states.deinit(self.allocator);
     }
 
-    /// Append every server's tool catalog (refreshed live each call) to the
-    /// model-facing definitions. Names are prefixed `mcp__<server>__<tool>`.
-    /// `arena_alloc` is expected to be a per-turn arena — all allocations
-    /// (Tool names, schema parses, prefixed strings) outlive only the turn.
+    /// Append every connected server's tool catalog (refreshed live each call)
+    /// to the model-facing definitions. Names are prefixed
+    /// `mcp__<server>__<tool>`. `arena_alloc` is expected to be a per-turn
+    /// arena. Servers still loading or failed are simply absent this turn.
     pub fn collectTools(
         self: *McpRegistry,
         arena_alloc: std.mem.Allocator,
     ) ![]const message.ToolDefinition {
-        // Loader thread may still be mutating `clients` — skip cleanly until
-        // it publishes ready=true. Caller treats empty as "no MCP this turn".
-        if (!self.isReady()) return &[_]message.ToolDefinition{};
+        // Snapshot connected (name, client) pairs under the lock, then do the
+        // network refresh + def building WITHOUT holding it (refreshTools does
+        // a JSON-RPC round-trip).
+        const Pair = struct { name: []const u8, client: *McpClient };
+        var pairs: std.ArrayList(Pair) = .{};
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            var it = self.clients.iterator();
+            while (it.next()) |entry| {
+                pairs.append(arena_alloc, .{
+                    .name = entry.key_ptr.*,
+                    .client = entry.value_ptr.*,
+                }) catch continue;
+            }
+        }
 
         var defs: std.ArrayList(message.ToolDefinition) = .{};
 
-        var it = self.clients.iterator();
-        while (it.next()) |entry| {
-            const server_name = entry.key_ptr.*;
-            const c = entry.value_ptr.*;
+        for (pairs.items) |p| {
+            const server_name = p.name;
+            const c = p.client;
 
-            // Refresh the client-owned cache (kept across turns for the
-            // confirmation modal's description lookup) and then iterate it
-            // to build the per-turn ToolDefinitions in the arena.
             c.refreshTools() catch |err| {
                 log.err("mcpServers.{s}: tools/list failed: {}", .{ server_name, err });
                 continue;
@@ -156,8 +193,6 @@ pub const McpRegistry = struct {
                     .{ server_name, t.name },
                 ) catch continue;
 
-                // Re-parse the schema in the arena so its json.Value can be
-                // embedded in ToolDefinition (lifetime = arena).
                 const schema = std.json.parseFromSliceLeaky(
                     std.json.Value,
                     arena_alloc,
@@ -173,7 +208,6 @@ pub const McpRegistry = struct {
                     break :blk schema.object.get("properties") orelse .null;
                 };
 
-                // Extract required[] into []const []const u8 (arena-owned).
                 var required_list: std.ArrayList([]const u8) = .{};
                 if (schema == .object) {
                     if (schema.object.get("required")) |r| if (r == .array) {
@@ -212,10 +246,6 @@ pub const McpRegistry = struct {
         input: std.json.Value,
     ) ?ToolResult {
         if (!std.mem.startsWith(u8, tool_name, "mcp__")) return null;
-        if (!self.isReady()) {
-            const msg = std.fmt.allocPrint(allocator, "MCP servers are still loading; retry shortly.", .{}) catch return .{ .content = "MCP loading", .is_error = true };
-            return .{ .content = msg, .is_error = true };
-        }
         const rest = tool_name[5..];
         const sep = std.mem.indexOf(u8, rest, "__") orelse {
             const msg = std.fmt.allocPrint(allocator, "Malformed MCP tool name: {s}", .{tool_name}) catch return .{ .content = "Malformed MCP tool name", .is_error = true };
@@ -224,8 +254,13 @@ pub const McpRegistry = struct {
         const server_name = rest[0..sep];
         const inner_name = rest[sep + 2 ..];
 
-        const c = self.clients.get(server_name) orelse {
-            const msg = std.fmt.allocPrint(allocator, "Unknown MCP server: {s}", .{server_name}) catch return .{ .content = "Unknown MCP server", .is_error = true };
+        const c = self.clientFor(server_name) orelse {
+            const reason = switch (self.serverState(server_name)) {
+                .loading => "is still connecting; retry shortly",
+                .failed => "failed to connect",
+                .connected => "is unavailable",
+            };
+            const msg = std.fmt.allocPrint(allocator, "MCP server '{s}' {s}.", .{ server_name, reason }) catch return .{ .content = "MCP server unavailable", .is_error = true };
             return .{ .content = msg, .is_error = true };
         };
 
@@ -233,8 +268,90 @@ pub const McpRegistry = struct {
             const msg = std.fmt.allocPrint(allocator, "MCP call failed ({s}.{s}): {}", .{ server_name, inner_name, err }) catch return .{ .content = "MCP call failed", .is_error = true };
             return .{ .content = msg, .is_error = true };
         };
-        // call_result.text was allocated from `allocator` by callTool — we
-        // hand ownership to the caller via ToolResult.
         return .{ .content = call_result.text, .is_error = call_result.is_error };
     }
 };
+
+/// Per-server loader thread: connect → initialize → prime tools → publish.
+/// Any failure flips the server to `.failed` and never affects the others.
+fn loadOne(ctx: *LoadCtx) void {
+    const self = ctx.reg;
+    const name = ctx.name;
+    const cfg = ctx.cfg;
+    defer self.allocator.destroy(ctx);
+
+    const client = (connectClient(self.allocator, name, cfg) catch |err| {
+        log.err("mcpServers.{s}: connect failed: {}", .{ name, err });
+        self.setState(name, .failed);
+        return;
+    }) orelse {
+        self.setState(name, .failed);
+        return;
+    };
+
+    client.initialize() catch |err| {
+        log.err("mcpServers.{s}: initialize failed: {}", .{ name, err });
+        client.shutdown();
+        self.setState(name, .failed);
+        return;
+    };
+
+    // Prime the cached tool catalog so /mcp and the confirmation modal can
+    // render names/descriptions before the first LLM turn refreshes it.
+    if (client.refreshTools()) {
+        log.info("mcpServers.{s}: {d} tool(s)", .{ name, client.cached_tools.len });
+    } else |err| {
+        log.warn("mcpServers.{s}: initial tools/list failed: {}", .{ name, err });
+    }
+
+    const key = self.allocator.dupe(u8, name) catch {
+        client.shutdown();
+        self.setState(name, .failed);
+        return;
+    };
+    self.mutex.lock();
+    self.clients.put(self.allocator, key, client) catch {
+        self.allocator.free(key);
+        self.mutex.unlock();
+        client.shutdown();
+        self.setState(name, .failed);
+        return;
+    };
+    self.mutex.unlock();
+
+    self.setState(name, .connected);
+    log.info("mcpServers.{s}: ready", .{name});
+}
+
+/// Build the right transport from a server's config entry. Returns null (not an
+/// error) when the entry has neither `command` (stdio) nor `url` (http).
+fn connectClient(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    cfg: std.json.Value,
+) !?*McpClient {
+    if (json_helpers.getStringField(cfg, "command")) |command| {
+        var args_list: std.ArrayList([]const u8) = .{};
+        defer args_list.deinit(allocator);
+        if (json_helpers.getField(cfg, "args")) |a| if (a == .array) {
+            for (a.array.items) |item| {
+                if (item == .string) try args_list.append(allocator, item.string);
+            }
+        };
+        return try McpClient.spawnStdio(allocator, name, command, args_list.items);
+    } else if (json_helpers.getStringField(cfg, "url")) |url| {
+        var hdrs: std.ArrayList(std.http.Header) = .{};
+        defer hdrs.deinit(allocator);
+        if (json_helpers.getObjectField(cfg, "headers")) |h| if (h == .object) {
+            var hit = h.object.iterator();
+            while (hit.next()) |he| {
+                if (he.value_ptr.* == .string) {
+                    try hdrs.append(allocator, .{ .name = he.key_ptr.*, .value = he.value_ptr.*.string });
+                }
+            }
+        };
+        return try McpClient.connectHttp(allocator, name, url, hdrs.items);
+    }
+    log.warn("mcpServers.{s}: needs 'command' or 'url', skipping", .{name});
+    return null;
+}

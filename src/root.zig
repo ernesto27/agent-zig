@@ -14,6 +14,8 @@ pub const mcp = struct {
     pub const protocol = @import("mcp/protocol.zig");
     pub const client = @import("mcp/client.zig");
     pub const registry = @import("mcp/registry.zig");
+    pub const stdio_transport = @import("mcp/stdio_transport.zig");
+    pub const http_transport = @import("mcp/http_transport.zig");
 };
 
 pub fn bufferedPrint() !void {

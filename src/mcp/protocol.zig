@@ -11,6 +11,8 @@
 
 const std = @import("std");
 
+const log = std.log.scoped(.mcp);
+
 /// JSON-RPC error object. Spec: code is integer, message is short string,
 /// data is optional and free-form.
 pub const RpcError = struct {
@@ -70,6 +72,55 @@ pub fn parseFrame(
     line: []const u8,
 ) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, allocator, line, .{});
+}
+
+/// Parse one JSON-RPC line and decide whether it's the response to `want_id`.
+///
+/// Returns the owned `Parsed` (caller must `.deinit()`) when the line is the
+/// matching response. Returns `null` — meaning "keep reading" — for non-JSON
+/// lines, server notifications, and responses to other ids. Returns
+/// `error.RpcError` when the matching response carries a JSON-RPC error.
+///
+/// Shared by every transport's read path (stdio newline frames, HTTP JSON
+/// bodies, HTTP SSE `data:` events) so id-matching never diverges. `name` is
+/// only used for log scoping.
+pub fn matchResponse(
+    gpa: std.mem.Allocator,
+    line: []const u8,
+    want_id: u64,
+    name: []const u8,
+) !?std.json.Parsed(std.json.Value) {
+    var parsed = std.json.parseFromSlice(
+        std.json.Value,
+        gpa,
+        line,
+        .{ .allocate = .alloc_always },
+    ) catch |err| {
+        log.warn("[{s}] non-JSON line ignored: {}", .{ name, err });
+        return null;
+    };
+
+    const frame = frameFromValue(parsed.value);
+
+    if (frame.id) |fid| {
+        if (fid == @as(i64, @intCast(want_id))) {
+            if (frame.err) |e| {
+                log.err("[{s}] RPC error {d}: {s}", .{ name, e.code, e.message });
+                parsed.deinit();
+                return error.RpcError;
+            }
+            return parsed;
+        }
+        // Response to an id we didn't issue — shouldn't happen in sync mode.
+        log.warn("[{s}] unexpected response id={d} (waiting for {d})", .{ name, fid, want_id });
+        parsed.deinit();
+        return null;
+    }
+
+    // No id → server-initiated notification. v1 ignores tools/list_changed etc.
+    if (frame.method) |m| log.info("[{s}] notification: {s}", .{ name, m });
+    parsed.deinit();
+    return null;
 }
 
 /// Project a `std.json.Value` (must be `.object`) into the structured

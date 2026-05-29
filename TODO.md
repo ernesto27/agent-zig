@@ -11,6 +11,7 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
+[] - only accept attach of images
 [x] - show skill command as skills:nameskill
 [] - export data to html
 [] - share session using gist
@@ -24,7 +25,6 @@
 [x] - create github actions ,  build TUI
 [x] - compact session
 [x] - fork session ,  new context
-[] - add command support
 [] - add provider google
 [] - connect to provider github copilot
 [x] - save command result in history to resume
@@ -64,6 +64,8 @@ hs doing
 [] - add arena options to have two models or more doint same task in paraller
 
 ## MCP - missing features
+
+[] - posibillity to stop mcp
 
 // transport
 [] - mcp: add streamable HTTP / SSE transport (needed for hosted servers: Linear, GitHub, Notion)

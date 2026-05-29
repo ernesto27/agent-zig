@@ -1,18 +1,50 @@
-//! One MCP server connection over stdio.
+//! One MCP server connection, transport-agnostic.
 //!
 //! Lifecycle:
-//!   spawn → initialize → (listTools | callTool)* → shutdown
+//!   spawnStdio | connectHttp → initialize → (listTools | callTool)* → shutdown
 //!
-//! Threading: requests are synchronous. The caller (the agentic loop) is
-//! already on a background thread, so blocking reads on stdout are fine.
-//! One side thread drains stderr into the .mcp log scope — without this,
-//! a chatty server would block on a full ~64KB stderr pipe buffer.
+//! The high-level MCP methods (`initialize`, `listTools`, `callTool`) speak
+//! JSON-RPC and don't care how bytes move — that's the `Transport` union's job
+//! (`stdio_transport.zig` for subprocesses, `http_transport.zig` for hosted
+//! Streamable HTTP servers). Requests are synchronous; the caller (the agentic
+//! loop) is already on a background thread, so blocking reads are fine.
 
 const std = @import("std");
 const protocol = @import("protocol.zig");
 const json_helpers = @import("../json_helpers.zig");
+const StdioTransport = @import("stdio_transport.zig").StdioTransport;
+const HttpTransport = @import("http_transport.zig").HttpTransport;
 
 const log = std.log.scoped(.mcp);
+
+/// How an McpClient moves JSON-RPC bytes. Two transports, both known at
+/// compile time — a tagged union (not a vtable) keeps dispatch monomorphic and
+/// matches the rest of the codebase's plain-struct style.
+pub const Transport = union(enum) {
+    stdio: *StdioTransport,
+    http: *HttpTransport,
+
+    /// Send a serialized request body and block for the response frame with
+    /// `id`. Caller owns the returned Parsed.
+    pub fn roundtrip(self: Transport, gpa: std.mem.Allocator, id: u64, body: []u8) !std.json.Parsed(std.json.Value) {
+        return switch (self) {
+            inline else => |t| t.roundtrip(gpa, id, body),
+        };
+    }
+
+    /// Fire-and-forget a notification body (no response expected).
+    pub fn send(self: Transport, body: []u8) !void {
+        return switch (self) {
+            inline else => |t| t.send(body),
+        };
+    }
+
+    pub fn deinit(self: Transport) void {
+        switch (self) {
+            inline else => |t| t.deinit(),
+        }
+    }
+};
 
 const empty_params: struct {} = .{};
 
@@ -49,12 +81,8 @@ pub const CallResult = struct {
 pub const McpClient = struct {
     allocator: std.mem.Allocator,
     server_name: []u8,                  // owned
-    child: std.process.Child,
+    transport: Transport,
     next_id: u64 = 1,
-
-    stdout_buf: []u8,                   // owned; backs stdout_reader
-    stdout_reader: std.fs.File.Reader,
-    stderr_thread: ?std.Thread = null,
 
     /// Tool catalog from the most recent `tools/list`. Owned by this
     /// McpClient's allocator (independent of any per-turn arena) so it can
@@ -62,72 +90,48 @@ pub const McpClient = struct {
     /// in the modal. Refreshed by `refreshTools()`.
     cached_tools: []Tool = &.{},
 
-    /// Spawn the server as a subprocess. argv = command + args. Inherits the
-    /// parent environment for v1 (env-var override comes with config wiring).
-    /// Heap-allocates the client so its internal buffers/reader can be
-    /// referenced by pointer without worrying about moves.
-    pub fn spawn(
+    /// Connect to a server running as a subprocess (stdio transport).
+    pub fn spawnStdio(
         allocator: std.mem.Allocator,
         server_name: []const u8,
         command: []const u8,
         args: []const []const u8,
     ) !*McpClient {
-        const argv = try allocator.alloc([]const u8, args.len + 1);
-        defer allocator.free(argv);
-        argv[0] = command;
-        for (args, 0..) |a, i| argv[i + 1] = a;
+        const transport = try StdioTransport.spawn(allocator, server_name, command, args);
+        errdefer transport.deinit();
+        return create(allocator, server_name, .{ .stdio = transport });
+    }
 
-        var child = std.process.Child.init(argv, allocator);
-        child.stdin_behavior = .Pipe;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        try child.spawn();
-        errdefer {
-            _ = child.kill() catch {};
-        }
+    /// Connect to a hosted server over Streamable HTTP. `headers` are extra
+    /// request headers (e.g. Authorization) borrowed from config; the
+    /// transport dupes what it keeps.
+    pub fn connectHttp(
+        allocator: std.mem.Allocator,
+        server_name: []const u8,
+        url: []const u8,
+        headers: []const std.http.Header,
+    ) !*McpClient {
+        const transport = try HttpTransport.connect(allocator, server_name, url, headers);
+        errdefer transport.deinit();
+        return create(allocator, server_name, .{ .http = transport });
+    }
 
+    fn create(allocator: std.mem.Allocator, server_name: []const u8, transport: Transport) !*McpClient {
         const self = try allocator.create(McpClient);
         errdefer allocator.destroy(self);
-
-        const stdout_buf = try allocator.alloc(u8, 64 * 1024);
-        errdefer allocator.free(stdout_buf);
-
         const name_copy = try allocator.dupe(u8, server_name);
-        errdefer allocator.free(name_copy);
-
         self.* = .{
             .allocator = allocator,
             .server_name = name_copy,
-            .child = child,
-            .stdout_buf = stdout_buf,
-            .stdout_reader = undefined,
+            .transport = transport,
         };
-        // Bind the reader to *our* (now-owned) stdout file and buffer.
-        self.stdout_reader = self.child.stdout.?.reader(self.stdout_buf);
-
-        // Stderr drainer takes its own duped name so its lifetime is
-        // independent from self (we may be shutting down while it's mid-line).
-        const name_for_thread = try allocator.dupe(u8, server_name);
-        self.stderr_thread = try std.Thread.spawn(.{}, drainStderr, .{
-            self.child.stderr.?, name_for_thread, allocator,
-        });
-
-        log.info("[{s}] spawned: {s}", .{ server_name, command });
         return self;
     }
 
-    /// Close stdin (signals server to exit), wait for child + stderr drain.
+    /// Tear down the transport, free the tool cache, destroy the client.
     pub fn shutdown(self: *McpClient) void {
-        if (self.child.stdin) |*stdin_file| {
-            stdin_file.close();
-            self.child.stdin = null;
-        }
-        _ = self.child.wait() catch |err| {
-            log.warn("[{s}] wait failed: {}", .{ self.server_name, err });
-        };
-        if (self.stderr_thread) |t| t.join();
+        self.transport.deinit();
         self.freeCachedTools();
-        self.allocator.free(self.stdout_buf);
         self.allocator.free(self.server_name);
         self.allocator.destroy(self);
     }
@@ -288,11 +292,10 @@ pub const McpClient = struct {
         };
     }
 
-    // ───── low-level transport ────────────────────────────────────────────
+    // ───── low-level JSON-RPC (delegates to the transport) ────────────────
 
-    /// Send a JSON-RPC request, read until the matching response arrives.
-    /// Notifications and stray responses are logged and discarded. Caller
-    /// owns the returned Parsed and must `.deinit()` it.
+    /// Build a JSON-RPC request, hand it to the transport, and return the
+    /// matching response. Caller owns the returned Parsed and must `.deinit()`.
     fn requestRaw(
         self: *McpClient,
         method: []const u8,
@@ -303,83 +306,13 @@ pub const McpClient = struct {
 
         const body = try protocol.buildRequest(self.allocator, id, method, params);
         defer self.allocator.free(body);
-        log.debug("[{s}] -> {s}", .{ self.server_name, body });
 
-        const stdin = self.child.stdin orelse return error.ServerStdinClosed;
-        try stdin.writeAll(body);
-        try stdin.writeAll("\n");
-
-        const reader = &self.stdout_reader.interface;
-        while (true) {
-            const line = (reader.takeDelimiter('\n') catch |err| {
-                log.err("[{s}] read error: {}", .{ self.server_name, err });
-                return err;
-            }) orelse return error.ServerClosedStream;
-            const trimmed = std.mem.trimRight(u8, line, "\r");
-            if (trimmed.len == 0) continue;
-            log.debug("[{s}] <- {s}", .{ self.server_name, trimmed });
-
-            var parsed = std.json.parseFromSlice(
-                std.json.Value,
-                self.allocator,
-                trimmed,
-                .{ .allocate = .alloc_always },
-            ) catch |err| {
-                log.warn("[{s}] non-JSON line ignored: {}", .{ self.server_name, err });
-                continue;
-            };
-
-            const frame = protocol.frameFromValue(parsed.value);
-
-            if (frame.id) |fid| {
-                if (fid == @as(i64, @intCast(id))) {
-                    if (frame.err) |e| {
-                        log.err("[{s}] RPC error {d}: {s}", .{ self.server_name, e.code, e.message });
-                        parsed.deinit();
-                        return error.RpcError;
-                    }
-                    return parsed;
-                }
-                // Response to an id we didn't issue — shouldn't happen in
-                // sync mode, drop it.
-                log.warn("[{s}] unexpected response id={d} (waiting for {d})", .{ self.server_name, fid, id });
-                parsed.deinit();
-                continue;
-            }
-
-            // No id → server-initiated notification. v1 ignores
-            // tools/list_changed etc.
-            if (frame.method) |m| {
-                log.info("[{s}] notification: {s}", .{ self.server_name, m });
-            }
-            parsed.deinit();
-        }
+        return self.transport.roundtrip(self.allocator, id, body);
     }
 
     fn notify(self: *McpClient, method: []const u8, params: anytype) !void {
         const body = try protocol.buildNotification(self.allocator, method, params);
         defer self.allocator.free(body);
-        log.debug("[{s}] -> {s}", .{ self.server_name, body });
-        const stdin = self.child.stdin orelse return error.ServerStdinClosed;
-        try stdin.writeAll(body);
-        try stdin.writeAll("\n");
+        try self.transport.send(body);
     }
 };
-
-fn drainStderr(
-    stderr_file: std.fs.File,
-    name_owned: []u8,
-    allocator: std.mem.Allocator,
-) void {
-    defer allocator.free(name_owned);
-    var buf: [4096]u8 = undefined;
-    var reader_state = stderr_file.reader(&buf);
-    const reader = &reader_state.interface;
-    while (true) {
-        const line = reader.takeDelimiter('\n') catch break;
-        const slice = line orelse break;
-        const trimmed = std.mem.trimRight(u8, slice, "\r");
-        if (trimmed.len == 0) continue;
-        log.info("[{s} stderr] {s}", .{ name_owned, trimmed });
-    }
-}
