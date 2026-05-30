@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const modal_list = @import("modal_list.zig");
 
 const log = std.log.scoped(.sessions);
 
@@ -27,10 +28,13 @@ pub const Sessions = struct {
         self.scroll = 0;
     }
 
-    pub fn init(self: *Sessions, allocator: std.mem.Allocator) !void {
+    fn sessionsDir(allocator: std.mem.Allocator) ![]const u8 {
         const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
+    }
 
-        const dir_path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
+    pub fn init(self: *Sessions, allocator: std.mem.Allocator) !void {
+        const dir_path = try sessionsDir(allocator);
         defer allocator.free(dir_path);
         std.fs.makeDirAbsolute(dir_path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -73,7 +77,7 @@ pub const Sessions = struct {
 
         for (file_list.items) |f| {
             const filename = try allocator.dupe(u8, f.name);
-            const date = try parseDateFromFilename(allocator, f.name);
+            const date = try relativeTime(allocator, f.mtime);
             const preview = readFirstLine(allocator, dir, f.name) catch try allocator.dupe(u8, f.name);
             try self.entries.append(allocator, .{ .filename = filename, .preview = preview, .date = date });
         }
@@ -95,8 +99,7 @@ pub const Sessions = struct {
 
     fn createPendingPath(self: *Sessions) ![]const u8 {
         const allocator = self.allocator;
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
-        const dir_path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
+        const dir_path = try sessionsDir(allocator);
         defer allocator.free(dir_path);
 
         const filename = try Sessions.generateFilename(allocator);
@@ -105,16 +108,42 @@ pub const Sessions = struct {
         return std.fs.path.join(allocator, &.{ dir_path, filename });
     }
 
-    fn parseDateFromFilename(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-        // Format: DD-MM-YYYY-HH:MM:SS-hex.log → display as "DD-MM-YYYY HH:MM:SS"
-        const without_ext = if (std.mem.endsWith(u8, name, ".log")) name[0 .. name.len - 4] else name;
-        const last_dash = std.mem.lastIndexOfScalar(u8, without_ext, '-') orelse
-            return allocator.dupe(u8, without_ext);
-        const date_time = without_ext[0..last_dash];
-        var buf = try allocator.dupe(u8, date_time);
-        // Replace '-' between YYYY and HH (always at index 10 for DD-MM-YYYY)
-        if (buf.len > 10 and buf[10] == '-') buf[10] = ' ';
-        return buf;
+    const secs_per_month: u64 = 30 * std.time.s_per_day;
+    const secs_per_year: u64 = 365 * std.time.s_per_day;
+
+    fn relativeTime(allocator: std.mem.Allocator, mtime_ns: i128) ![]const u8 {
+        const now: i128 = std.time.nanoTimestamp();
+        const diff: i128 = @divTrunc(now - mtime_ns, std.time.ns_per_s);
+        const s: u64 = if (diff < 0) 0 else @intCast(diff);
+
+        if (s < std.time.s_per_min) return allocator.dupe(u8, "just now");
+        if (s < std.time.s_per_hour) {
+            const n = s / std.time.s_per_min;
+            return std.fmt.allocPrint(allocator, "{d} minute{s} ago", .{ n, plural(n) });
+        }
+        if (s < std.time.s_per_day) {
+            const n = s / std.time.s_per_hour;
+            return std.fmt.allocPrint(allocator, "{d} hour{s} ago", .{ n, plural(n) });
+        }
+        if (s < 2 * std.time.s_per_day) return allocator.dupe(u8, "yesterday");
+        if (s < std.time.s_per_week) {
+            const n = s / std.time.s_per_day;
+            return std.fmt.allocPrint(allocator, "{d} days ago", .{n});
+        }
+        if (s < secs_per_month) {
+            const n = s / std.time.s_per_week;
+            return std.fmt.allocPrint(allocator, "{d} week{s} ago", .{ n, plural(n) });
+        }
+        if (s < secs_per_year) {
+            const n = s / secs_per_month;
+            return std.fmt.allocPrint(allocator, "{d} month{s} ago", .{ n, plural(n) });
+        }
+        const n = s / secs_per_year;
+        return std.fmt.allocPrint(allocator, "{d} year{s} ago", .{ n, plural(n) });
+    }
+
+    fn plural(n: u64) []const u8 {
+        return if (n == 1) "" else "s";
     }
 
     fn readFirstLine(allocator: std.mem.Allocator, dir: std.fs.Dir, name: []const u8) ![]const u8 {
@@ -175,82 +204,28 @@ pub const Sessions = struct {
     }
 
     pub fn render(self: *const Sessions, win: vaxis.Window, screen_w: u16, screen_h: u16) void {
-        const visible: usize = @min(max_visible, self.entries.items.len);
-        const n: u16 = @intCast(visible);
-        const modal_w: u16 = @min(70, screen_w -| 4);
-        const modal_h: u16 = if (self.entries.items.len == 0) 4 else n + 3;
-        const modal_x: u16 = (screen_w -| modal_w) / 2;
-        const modal_y: u16 = (screen_h -| modal_h) / 2;
+        const count = @min(max_visible, self.entries.items.len -| self.scroll);
+        var items_buf: [max_visible]modal_list.Item = undefined;
+        for (0..count) |i| {
+            const entry = self.entries.items[self.scroll + i];
+            items_buf[i] = .{ .primary = entry.preview, .secondary = entry.date };
+        }
 
-        const modal = win.child(.{
-            .x_off = modal_x,
-            .y_off = modal_y,
-            .width = modal_w,
-            .height = modal_h,
-            .border = .{ .where = .all, .glyphs = .single_rounded },
+        modal_list.render(win, screen_w, screen_h, .{
+            .title = " Resume session",
+            .items = items_buf[0..count],
+            .selected = self.selected -| self.scroll,
+            .empty_message = "  No sessions found",
+            .max_width = 70,
+            .max_height = max_visible + 4,
         });
-
-        const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
-        var fr: u16 = 0;
-        while (fr < modal_h) : (fr += 1) {
-            var fc: u16 = 0;
-            while (fc < modal_w) : (fc += 1) {
-                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
-            }
-        }
-
-        _ = modal.printSegment(.{
-            .text = " Resume session",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-        }, .{ .row_offset = 0, .col_offset = 1 });
-        _ = modal.printSegment(.{
-            .text = "esc ",
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
-        }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
-
-        if (self.entries.items.len == 0) {
-            _ = modal.printSegment(.{
-                .text = "  No sessions found",
-                .style = .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } }, .italic = true },
-            }, .{ .row_offset = 1, .col_offset = 1 });
-            return;
-        }
-
-        const slice = self.entries.items[self.scroll..@min(self.scroll + visible, self.entries.items.len)];
-        for (slice, 0..) |entry, i| {
-            const idx = self.scroll + i;
-            const row: u16 = @intCast(i + 1);
-            const is_sel = idx == self.selected;
-            const bg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xC0, 0x70, 0x20 } } else .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
-            const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else .{ .rgb = .{ 0xCC, 0xCC, 0xCC } };
-
-            if (is_sel) {
-                var c: u16 = 1;
-                while (c < modal_w -| 1) : (c += 1) {
-                    modal.writeCell(c, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
-                }
-            }
-
-            const prefix: []const u8 = if (is_sel) " > " else "   ";
-            const pre_res = modal.printSegment(.{
-                .text = prefix,
-                .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
-            }, .{ .row_offset = row, .col_offset = 1 });
-            const preview_res = modal.printSegment(.{
-                .text = entry.preview,
-                .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
-            }, .{ .row_offset = row, .col_offset = pre_res.col });
-            _ = modal.printSegment(.{
-                .text = entry.date,
-                .style = .{ .fg = if (is_sel) .{ .rgb = .{ 0xFF, 0xCC, 0x88 } } else .{ .rgb = .{ 0x66, 0x66, 0x88 } }, .bg = bg },
-            }, .{ .row_offset = row, .col_offset = preview_res.col + 1 });
-        }
     }
 
     pub fn readFileContent(self: *Sessions, allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
         const max_bytes = 10 * 1024 * 1024;
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
-        const path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions", filename });
+        const dir_path = try sessionsDir(allocator);
+        defer allocator.free(dir_path);
+        const path = try std.fs.path.join(allocator, &.{ dir_path, filename });
         defer allocator.free(path);
         const f = try std.fs.openFileAbsolute(path, .{ .mode = .read_write });
         const content = f.readToEndAlloc(allocator, max_bytes) catch |err| {

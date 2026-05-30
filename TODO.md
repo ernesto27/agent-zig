@@ -11,11 +11,12 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
-[] - only accept attach of images
+[x] - only accept attach of images
 [x] - show skill command as skills:nameskill
 [] - export data to html
 [] - share session using gist
 [] - rename session
+[] - show nice date created in session
 [x] - add a system prompt
 [] - add command tu run as cli query
 [] - option to replace systemp prompt

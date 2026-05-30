@@ -70,7 +70,7 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         }, .{ .row_offset = 0, .col_offset = modal_w - hint_len - 2 });
     }
 
-    var items_row: u16 = 2;
+    const items_row: u16 = 2;
     if (opts.query) |q| {
         const text = if (q.len > 0) q else opts.query_placeholder;
         const style: vaxis.Style = if (q.len > 0)
@@ -78,9 +78,6 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         else
             .{ .fg = fg_placeholder, .bg = modal_bg };
         _ = modal.printSegment(.{ .text = text, .style = style }, .{ .row_offset = 1, .col_offset = 2 });
-        items_row = 2;
-    } else {
-        items_row = 2;
     }
 
     if (opts.items.len == 0) {
