@@ -8,9 +8,8 @@ mock-server/node_modules
 test
 dist/*
 zig-pkg
-.agents/skills/test-script/SKILL.md
-.agents/skills/test-script/references/REFERENCE.md
-.agents/skills/test-script/scripts/hello.sh
+.agents/skills/test-script/
+.claude/skills/test-script
 .opencode/commands/create-component.md
 .opencode/commands/create-file.md
 .opencode/commands/dummy.md

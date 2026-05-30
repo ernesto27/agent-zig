@@ -13,6 +13,7 @@
 [] - mouse wheel scroll for attachment preview panel
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
+[] - when run skill,  execute
 [] - export data to html
 [] - share session using gist
 [] - rename session

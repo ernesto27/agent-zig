@@ -11,6 +11,7 @@ Commit already-staged changes and push to the current branch.
 2. Write the commit message:
    - If `$ARGUMENTS` is provided, use it verbatim.
    - Otherwise inspect `git diff --cached` and write a short imperative-mood summary (50 chars max subject line).
-3. Commit: `git commit -m "<message>"` — no Co-Authored-By line
-4. Push: `git push`
-5. Confirm with `git log --oneline -1`.
+3. Show the proposed commit message and ask the user to confirm before committing. Wait for approval.
+4. Commit: `git commit -m "<message>"` — no Co-Authored-By line
+5. Push: `git push`
+6. Confirm with `git log --oneline -1`.
