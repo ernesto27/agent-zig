@@ -204,16 +204,17 @@ pub fn renderInput(
             const chip = if (is_image)
                 std.fmt.bufPrint(remaining, "[Image {d}]", .{image_idx}) catch "[Image]"
             else
-                std.fmt.bufPrint(remaining, "[File {d}]", .{file_idx}) catch "[File]";
+                std.fmt.bufPrint(remaining, "{s}", .{path}) catch path;
             buf_off += chip.len;
             if (is_image) image_idx += 1 else file_idx += 1;
+            const chip_style: vaxis.Style = if (is_image) .{
+                .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
+                .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+                .bold = true,
+            } else .{};
             const r = input_win.printSegment(.{
                 .text = chip,
-                .style = .{
-                    .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
-                    .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
-                    .bold = true,
-                },
+                .style = chip_style,
             }, .{ .row_offset = 0, .col_offset = chip_col });
             chip_col = r.col;
             const r2 = input_win.printSegment(.{

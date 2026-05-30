@@ -23,26 +23,22 @@ pub fn build(arena: std.mem.Allocator, paths: []const []u8, show_images: bool) !
     var image_idx: u32 = 1;
 
     for (paths) |path| {
+        // Only images get a preview; non-image files show as a path chip in
+        // the input line and have no panel entry.
+        if (image_attach.mimeFromPath(path) == null) continue;
+
         const base = std.fs.path.basename(path);
         const header = try std.fmt.allocPrint(arena, "path: {s}", .{base});
         try out.append(arena, .{ .text = header, .kind = .header });
 
-        if (image_attach.mimeFromPath(path) != null) {
-            if (show_images and image_attach.canUseLocalPathPreview(path)) {
-                const owned_path = try arena.dupe(u8, path);
-                try out.append(arena, .{ .text = owned_path, .kind = .image });
-            } else {
-                const label = try std.fmt.allocPrint(arena, "   [Image #{d}]", .{image_idx});
-                try out.append(arena, .{ .text = label, .kind = .placeholder });
-            }
-            image_idx += 1;
-            continue;
+        if (show_images and image_attach.canUseLocalPathPreview(path)) {
+            const owned_path = try arena.dupe(u8, path);
+            try out.append(arena, .{ .text = owned_path, .kind = .image });
+        } else {
+            const label = try std.fmt.allocPrint(arena, "   [Image #{d}]", .{image_idx});
+            try out.append(arena, .{ .text = label, .kind = .placeholder });
         }
-
-        readPreviewLines(arena, path, &out) catch {
-            const ph = try std.fmt.allocPrint(arena, "   [unreadable: {s}]", .{base});
-            try out.append(arena, .{ .text = ph, .kind = .placeholder });
-        };
+        image_idx += 1;
     }
 
     return out.toOwnedSlice(arena);
@@ -79,31 +75,25 @@ fn readPreviewLines(
 }
 
 pub fn requestedHeight(paths: []const []u8, show_images: bool) u16 {
-    if (paths.len == 0) return 0;
     var rows: u16 = 0;
     for (paths) |path| {
         rows +|= attachmentRows(path, show_images);
     }
-
+    if (rows == 0) return 0; // no images → no panel
     return rows +| 2;
 }
 
 pub fn attachmentRows(path: []const u8, show_images: bool) u16 {
-    return 1 + if (image_attach.mimeFromPath(path) != null)
-        if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1
-    else
-        @as(u16, @intCast(max_lines_per_file));
+    if (image_attach.mimeFromPath(path) == null) return 0; // non-image: no preview
+    return 1 + if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1;
 }
 
 pub fn totalContentRows(paths: []const []u8, show_images: bool) usize {
     var rows: usize = 0;
     for (paths) |path| {
+        if (image_attach.mimeFromPath(path) == null) continue; // non-image: no preview
         rows += 1;
-        if (image_attach.mimeFromPath(path) != null) {
-            rows += if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1;
-        } else {
-            rows += max_lines_per_file;
-        }
+        rows += if (show_images and image_attach.canUseLocalPathPreview(path)) image_preview_rows else 1;
     }
     return rows;
 }
