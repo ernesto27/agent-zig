@@ -1,11 +1,16 @@
 ---
-description: Commit staged changes and push to the current branch
+name: commit-push
+description: Commit already-staged changes and push to the current branch. Use when the user says "commit and push", "commit-push", "/commit-push", or asks to commit staged changes and push.
 disable-model-invocation: true
 allowed-tools: Bash(git commit *) Bash(git push *) Bash(git status *) Bash(git diff *) Bash(git log *)
 argument-hint: "[commit message]"
 ---
 
+# Commit & Push
+
 Commit already-staged changes and push to the current branch.
+
+## Steps
 
 1. Run `git diff --cached --stat` to review what will be committed.
 2. Write the commit message:

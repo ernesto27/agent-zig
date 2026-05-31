@@ -423,10 +423,10 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.model_picker.active and ctx.model_picker.results.items.len > 0) {
         const selected = ctx.model_picker.results.items[ctx.model_picker.selected];
         ctx.app.llm_client.config.model = selected.id;
-        ctx.config.selected = selected.id;
+        ctx.config.providers.selected = selected.id;
         if (agent.llm.providers.findModel(selected.id)) |found| {
             ctx.app.llm_client.config.provider_name = found.provider.name;
-            if (ctx.config.forProvider(found.provider.name)) |pc| {
+            if (ctx.config.providers.forProvider(found.provider.name)) |pc| {
                 ctx.app.llm_client.config.base_url = pc.baseUrl;
                 ctx.app.llm_client.config.api_key = pc.apiKey;
                 pc.model = selected.id;
@@ -444,7 +444,7 @@ fn handleEnter(ctx: *InputContext) !bool {
             const provider_name = ctx.provider_picker.selectedProvider().name;
             ctx.app.llm_client.config.api_key = new_key;
             ctx.app.llm_client.config.provider_name = provider_name;
-            if (ctx.config.forProvider(provider_name)) |pc| pc.apiKey = new_key;
+            if (ctx.config.providers.forProvider(provider_name)) |pc| pc.apiKey = new_key;
             agent.config.save(alloc, ctx.config.*) catch {};
         }
         ctx.provider_picker.reset(alloc);

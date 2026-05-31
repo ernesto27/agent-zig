@@ -61,12 +61,12 @@ pub fn main() !void {
     var llm_client_cfg = agent.llm.Config{
         .base_url = "",
         .api_key = "",
-        .model = config.selected,
+        .model = config.providers.selected,
         .provider_name = "",
     };
-    if (agent.llm.providers.findModel(config.selected)) |found| {
+    if (agent.llm.providers.findModel(config.providers.selected)) |found| {
         llm_client_cfg.provider_name = found.provider.name;
-        if (config.forProvider(found.provider.name)) |pc| {
+        if (config.providers.forProvider(found.provider.name)) |pc| {
             llm_client_cfg.base_url = pc.baseUrl;
             llm_client_cfg.api_key = pc.apiKey;
         }

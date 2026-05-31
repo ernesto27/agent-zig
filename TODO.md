@@ -11,6 +11,7 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
+[] - show preview of sessions
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
 [] - when run skill,  execute

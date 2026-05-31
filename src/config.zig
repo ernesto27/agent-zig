@@ -7,19 +7,23 @@ pub const ProviderConfig = struct {
     model: []const u8 = "",
 };
 
-pub const Config = struct {
+pub const Providers = struct {
     selected: []const u8 = "",
     anthropic: ProviderConfig = .{ .baseUrl = "https://api.anthropic.com" },
     openai: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
     deepseek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
-    mcpServers: std.json.Value = .null,
 
-    pub fn forProvider(self: *Config, name: []const u8) ?*ProviderConfig {
+    pub fn forProvider(self: *Providers, name: []const u8) ?*ProviderConfig {
         if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;
         if (std.mem.eql(u8, name, "OpenAI")) return &self.openai;
         if (std.mem.eql(u8, name, "DeepSeek")) return &self.deepseek;
         return null;
     }
+};
+
+pub const Config = struct {
+    providers: Providers = .{},
+    mcpServers: std.json.Value = .null,
 };
 
 fn configDir(allocator: std.mem.Allocator) ![]const u8 {
@@ -45,11 +49,7 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
     defer allocator.free(path);
 
     std.fs.accessAbsolute(path, .{}) catch {
-        const empty = Config{
-            .anthropic = .{ .baseUrl = "https://api.anthropic.com" },
-            .openai = .{ .baseUrl = "https://api.openai.com" },
-            .deepseek = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
-        };
+        const empty = Config{ .providers = .{} };
         const json = try std.json.Stringify.valueAlloc(allocator, empty, .{ .whitespace = .indent_4 });
         defer allocator.free(json);
 
