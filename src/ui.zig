@@ -741,7 +741,7 @@ pub fn renderStatus(
     status_row: u16,
     app: *App,
     model: []const u8,
-    effort: agent.llm.message.Effort,
+    effort: agent.config.Effort,
     app_version: []const u8,
     clipboard_status: ?[]const u8,
     show_exit: bool,

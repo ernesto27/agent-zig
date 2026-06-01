@@ -37,12 +37,11 @@ pub fn main() !void {
     try log_mod.Logger.init(alloc);
     defer log_mod.Logger.deinit();
 
-    const parsed_config = agent.config.load(alloc) catch {
-        std.debug.print("Failed to load config. Create ~/.config/agent-zig/config.jhison\n", .{});
+    var config_store = agent.config.ConfigStore.init(alloc) catch {
+        std.debug.print("Failed to load config. Create ~/.config/agent-zig/config.json\n", .{});
         return;
     };
-    defer parsed_config.deinit();
-    var config = parsed_config.value;
+    defer config_store.deinit();
 
     var model_picker = model_picker_mod.ModelPicker.init();
     defer model_picker.deinit(alloc);
@@ -61,22 +60,23 @@ pub fn main() !void {
     var llm_client_cfg = agent.llm.Config{
         .base_url = "",
         .api_key = "",
-        .model = config.providers.selected,
+        .model = config_store.cfg.providers.selected,
         .provider_name = "",
     };
-    if (agent.llm.providers.findModel(config.providers.selected)) |found| {
+    if (agent.llm.providers.findModel(config_store.cfg.providers.selected)) |found| {
         llm_client_cfg.provider_name = found.provider.name;
-        if (config.providers.forProvider(found.provider.name)) |pc| {
+        if (config_store.cfg.providers.forProvider(found.provider.name)) |pc| {
             llm_client_cfg.base_url = pc.baseUrl;
             llm_client_cfg.api_key = pc.apiKey;
+            llm_client_cfg.effort = config_store.thinkEffort(found.provider.name);
         }
     }
     var llm_client = agent.llm.Client.init(alloc, llm_client_cfg);
     defer llm_client.deinit();
 
-    var app = App.init(alloc, &llm_client, &config);
+    var app = App.init(alloc, &llm_client, &config_store);
     defer app.deinit();
-    app.loadMcpServers(config.mcpServers);
+    app.loadMcpServers(config_store.cfg.mcpServers);
 
     var command_picker = command_picker_mod.CommandPicker.init(&app.skill_registry);
     defer command_picker.deinit(alloc);
@@ -118,7 +118,7 @@ pub fn main() !void {
         .mcp_picker = &mcp_picker,
         .spinner_state = &spinner_state,
         .auto_scroll = &auto_scroll,
-        .config = &config,
+        .config = &config_store,
         .show_exit = &show_exit,
         .input = .{},
         .cursor_pos = 0,

@@ -104,7 +104,7 @@ pub const App = struct {
     const Self = @This();
     const log = std.log.scoped(.app);
 
-    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client, config: *agent.config.Config) Self {
+    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client, config: *agent.config.ConfigStore) Self {
         var sp = agent.system_prompt.SystemPrompt{};
         sp.readContent(alloc) catch |err| {
             log.err("failed to load system prompt: {}", .{err});

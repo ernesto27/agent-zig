@@ -25,7 +25,7 @@ pub const Sessions = struct {
     entries: std.ArrayListUnmanaged(FileEntry) = .{},
     rename_active: bool = false,
     rename_input: std.ArrayListUnmanaged(u8) = .{},
-    config_ref: ?*config.Config = null,
+    config_ref: ?*config.ConfigStore = null,
     config_sessions: []const config.SessionEntry = &.{},
 
     pub fn open(self: *Sessions) void {
@@ -55,9 +55,9 @@ pub const Sessions = struct {
         return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
     }
 
-    pub fn init(self: *Sessions, allocator: std.mem.Allocator, cfg: *config.Config) !void {
+    pub fn init(self: *Sessions, allocator: std.mem.Allocator, cfg: *config.ConfigStore) !void {
         self.config_ref = cfg;
-        self.config_sessions = cfg.sessions;
+        self.config_sessions = cfg.cfg.sessions;
         const dir_path = try sessionsDir(allocator);
         defer allocator.free(dir_path);
         std.fs.makeDirAbsolute(dir_path) catch |err| switch (err) {
@@ -356,8 +356,8 @@ pub const Sessions = struct {
         const filename = self.current_filename orelse return error.NoCurrentSession;
         const cfg = self.config_ref orelse return error.NoConfig;
 
-        try config.renameSession(allocator, cfg, filename, new_name);
-        self.config_sessions = cfg.sessions;
+        try cfg.renameSession(filename, new_name);
+        self.config_sessions = cfg.cfg.sessions;
 
         for (self.entries.items) |*entry| {
             if (std.mem.eql(u8, entry.filename, filename)) {
@@ -382,10 +382,10 @@ pub const Sessions = struct {
                 self.current_filename = self.allocator.dupe(u8, filename) catch null;
                 if (self.config_ref) |cfg| {
                     const name = stripYouPrefix(text);
-                    config.createSession(allocator, cfg, filename, name) catch |err| {
+                    cfg.createSession(filename, name) catch |err| {
                         log.err("failed to create session config entry: {}", .{err});
                     };
-                    self.config_sessions = cfg.sessions;
+                    self.config_sessions = cfg.cfg.sessions;
                 }
             } else return;
         }

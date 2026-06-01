@@ -1,6 +1,7 @@
 const std = @import("std");
 const anthropic = @import("anthropic.zig");
 const message = @import("message.zig");
+const config_mod = @import("../config.zig");
 const openai = @import("openai.zig");
 const json_helpers = @import("../json_helpers.zig");
 
@@ -14,7 +15,7 @@ pub const Config = struct {
     api_key: []const u8,
     model: []const u8,
     provider_name: []const u8,
-    effort: message.Effort = .none,
+    effort: config_mod.Effort = .none,
 };
 
 pub const CancelFn = *const fn (*anyopaque) bool;

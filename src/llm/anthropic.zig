@@ -1,5 +1,6 @@
 const std = @import("std");
 const message = @import("message.zig");
+const config = @import("../config.zig");
 const providers = @import("providers.zig");
 
 pub const version = "2023-06-01";
@@ -11,7 +12,7 @@ pub fn buildRequestBody(
     tools: []const message.ToolDefinition,
     system_prompt: ?[]const u8,
     stream: bool,
-    effort: message.Effort,
+    effort: config.Effort,
 ) ![]u8 {
     const model_info = providers.findModel(model);
     const req_body = message.MessagesRequest{

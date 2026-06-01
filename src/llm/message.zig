@@ -1,32 +1,5 @@
 const std = @import("std");
-
-pub const Effort = enum {
-    none,
-    low,
-    medium,
-    high,
-    max,
-
-    pub fn next(self: Effort) Effort {
-        return switch (self) {
-            .none => .low,
-            .low => .medium,
-            .medium => .high,
-            .high => .max,
-            .max => .none,
-        };
-    }
-
-    pub fn label(self: Effort) []const u8 {
-        return switch (self) {
-            .none => "off",
-            .low => "low",
-            .medium => "medium",
-            .high => "high",
-            .max => "max",
-        };
-    }
-};
+const config = @import("../config.zig");
 
 pub const Role = enum {
     user,
@@ -68,7 +41,7 @@ pub const MessagesRequest = struct {
     max_tokens: u32 = 8096,
     stream: bool = false,
     tools: []const ToolDefinition = &.{},
-    effort: Effort = .none,
+    effort: config.Effort = .none,
     supports_thinking: bool = false,
 
     /// Custom serializer: omit tools when empty, omit stream when false

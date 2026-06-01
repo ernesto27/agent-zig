@@ -28,7 +28,7 @@ pub const InputContext = struct {
     mcp_picker: *mcp_picker_mod.McpPicker,
     spinner_state: *ui.SpinnerState,
     auto_scroll: *bool,
-    config: *agent.config.Config,
+    config: *agent.config.ConfigStore,
     show_exit: *bool,
 
     // owned
@@ -45,8 +45,13 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         return true;
     } else if (key.matches('t', .{ .ctrl = true })) {
         const model = model_picker_mod.findModel(ctx.app.llm_client.config.model);
-        if (model != null and model.?.model.supports_thinking)
+        if (model != null and model.?.model.supports_thinking) {
+            const effort = ctx.app.llm_client.config.effort.next();
+            ctx.config.updateThinkEffort(ctx.app.llm_client.config.provider_name, effort) catch |err| {
+                log.err("failed to persist thinking effort: {}", .{err});
+            };
             ctx.app.llm_client.config.effort = ctx.app.llm_client.config.effort.next();
+        }
     } else if (key.matches('a', .{ .ctrl = true })) {
         ctx.app.tool_confirmation.cursor = .approve;
     } else if (key.matches('c', .{ .ctrl = true })) {
@@ -444,16 +449,17 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.model_picker.active and ctx.model_picker.results.items.len > 0) {
         const selected = ctx.model_picker.results.items[ctx.model_picker.selected];
         ctx.app.llm_client.config.model = selected.id;
-        ctx.config.providers.selected = selected.id;
+        ctx.config.cfg.providers.selected = selected.id;
         if (agent.llm.providers.findModel(selected.id)) |found| {
             ctx.app.llm_client.config.provider_name = found.provider.name;
-            if (ctx.config.providers.forProvider(found.provider.name)) |pc| {
+            if (ctx.config.cfg.providers.forProvider(found.provider.name)) |pc| {
                 ctx.app.llm_client.config.base_url = pc.baseUrl;
                 ctx.app.llm_client.config.api_key = pc.apiKey;
+                ctx.app.llm_client.config.effort = ctx.config.thinkEffort(found.provider.name);
                 pc.model = selected.id;
             }
         }
-        agent.config.save(alloc, ctx.config.*) catch {};
+        ctx.config.save() catch {};
         ctx.model_picker.reset();
     } else if (ctx.mcp_picker.active) {
         ctx.mcp_picker.enter();
@@ -465,8 +471,8 @@ fn handleEnter(ctx: *InputContext) !bool {
             const provider_name = ctx.provider_picker.selectedProvider().name;
             ctx.app.llm_client.config.api_key = new_key;
             ctx.app.llm_client.config.provider_name = provider_name;
-            if (ctx.config.providers.forProvider(provider_name)) |pc| pc.apiKey = new_key;
-            agent.config.save(alloc, ctx.config.*) catch {};
+            if (ctx.config.cfg.providers.forProvider(provider_name)) |pc| pc.apiKey = new_key;
+            ctx.config.save() catch {};
         }
         ctx.provider_picker.reset();
     } else if (ctx.app.sessions.active and ctx.app.sessions.entries.items.len > 0) {
