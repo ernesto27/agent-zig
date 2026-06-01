@@ -27,12 +27,11 @@ pub const ProviderPicker = struct {
         return &model_picker.providers[self.selected];
     }
 
-    pub fn reset(self: *ProviderPicker, alloc: std.mem.Allocator) void {
+    pub fn reset(self: *ProviderPicker) void {
         self.active = false;
         self.selected = 0;
         self.phase = .list;
         self.key_input.clearRetainingCapacity();
-        _ = alloc;
     }
 
     pub fn render(self: *const ProviderPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {

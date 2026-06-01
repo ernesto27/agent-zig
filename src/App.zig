@@ -104,13 +104,13 @@ pub const App = struct {
     const Self = @This();
     const log = std.log.scoped(.app);
 
-    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client) Self {
+    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client, config: *agent.config.Config) Self {
         var sp = agent.system_prompt.SystemPrompt{};
         sp.readContent(alloc) catch |err| {
             log.err("failed to load system prompt: {}", .{err});
         };
         var sess = sessions.Sessions{};
-        sess.init(alloc) catch |err| {
+        sess.init(alloc, config) catch |err| {
             log.err("failed to init sessions: {}", .{err});
         };
         var skill_registry = agent.skills.Registry.init();
@@ -607,7 +607,7 @@ pub const App = struct {
                     .role = .user,
                     .content = .{ .text = t },
                 }) catch {};
-                self.sessions.appendFmt(alloc, "You: {s}", .{t});
+                self.sessions.appendFmt("You: {s}", .{t});
             },
             .with_images => |blocks| {
                 self.llm_history.append(alloc, .{
@@ -615,7 +615,7 @@ pub const App = struct {
                     .content = .{ .content_blocks = blocks },
                 }) catch {};
                 const txt = if (blocks[0].text) |t| t else "(image)";
-                self.sessions.appendFmt(alloc, "You: {s} [+image]", .{txt});
+                self.sessions.appendFmt("You: {s} [+image]", .{txt});
             },
         }
         self.mutex.unlock();
@@ -731,7 +731,7 @@ pub const App = struct {
                         .role = .assistant,
                         .content = .{ .text = duped },
                     }) catch {};
-                    self.sessions.appendFmt(alloc, "AI: \n{s}", .{duped});
+                    self.sessions.appendFmt("AI: \n{s}", .{duped});
                     self.mutex.unlock();
                 }
                 break;

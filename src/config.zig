@@ -21,8 +21,14 @@ pub const Providers = struct {
     }
 };
 
+pub const SessionEntry = struct {
+    name: []const u8 = "",
+    file: []const u8 = "",
+};
+
 pub const Config = struct {
     providers: Providers = .{},
+    sessions: []const SessionEntry = &.{},
     mcpServers: std.json.Value = .null,
 };
 
@@ -73,6 +79,55 @@ pub fn save(allocator: std.mem.Allocator, cfg: Config) !void {
     try file.writeAll(json);
 
     log.info("saved config to {s}", .{path});
+}
+
+pub fn createSession(allocator: std.mem.Allocator, cfg: *Config, file: []const u8, name: []const u8) !void {
+    const sessions = try allocator.alloc(SessionEntry, cfg.sessions.len + 1);
+    errdefer allocator.free(sessions);
+
+    for (cfg.sessions, 0..) |session, i| {
+        sessions[i] = session;
+    }
+
+    const file_copy = try allocator.dupe(u8, file);
+    errdefer allocator.free(file_copy);
+
+    const name_copy = try allocator.dupe(u8, name);
+    errdefer allocator.free(name_copy);
+
+    sessions[cfg.sessions.len] = .{
+        .name = name_copy,
+        .file = file_copy,
+    };
+
+    var tmp = cfg.*;
+    tmp.sessions = sessions;
+    try save(allocator, tmp);
+    cfg.sessions = sessions;
+}
+
+pub fn renameSession(allocator: std.mem.Allocator, cfg: *Config, file: []const u8, new_name: []const u8) !void {
+    const sessions = try allocator.alloc(SessionEntry, cfg.sessions.len);
+    errdefer allocator.free(sessions);
+
+    var found = false;
+    for (cfg.sessions, 0..) |session, i| {
+        if (std.mem.eql(u8, session.file, file)) {
+            sessions[i] = .{ .name = try allocator.dupe(u8, new_name), .file = session.file };
+            found = true;
+        } else {
+            sessions[i] = session;
+        }
+    }
+    if (!found) {
+        allocator.free(sessions);
+        return error.SessionNotFound;
+    }
+
+    var tmp = cfg.*;
+    tmp.sessions = sessions;
+    try save(allocator, tmp);
+    cfg.sessions = sessions;
 }
 
 pub fn load(allocator: std.mem.Allocator) !std.json.Parsed(Config) {

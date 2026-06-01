@@ -12,6 +12,8 @@
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
 [] - show preview of sessions
+[] - save think in config.json
+[] - command to copy to clipboar current session
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
 [] - when run skill,  execute

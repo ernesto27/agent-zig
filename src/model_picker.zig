@@ -55,12 +55,11 @@ pub const ModelPicker = struct {
         try self.refresh(alloc);
     }
 
-    pub fn reset(self: *ModelPicker, alloc: std.mem.Allocator) void {
+    pub fn reset(self: *ModelPicker) void {
         self.active = false;
         self.query.clearRetainingCapacity();
         self.selected = 0;
         self.results.clearRetainingCapacity();
-        _ = alloc;
     }
 
     pub fn render(self: *const ModelPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {

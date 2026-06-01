@@ -74,7 +74,7 @@ pub fn main() !void {
     var llm_client = agent.llm.Client.init(alloc, llm_client_cfg);
     defer llm_client.deinit();
 
-    var app = App.init(alloc, &llm_client);
+    var app = App.init(alloc, &llm_client, &config);
     defer app.deinit();
     app.loadMcpServers(config.mcpServers);
 
@@ -385,6 +385,10 @@ pub fn main() !void {
         // /resume session picker overlay
         if (app.sessions.active) {
             app.sessions.render(win, vx.screen.width, vx.screen.height);
+        }
+
+        if (app.sessions.rename_active) {
+            app.sessions.renderRename(win, vx.screen.width, vx.screen.height);
         }
 
         const input_win = win.child(.{

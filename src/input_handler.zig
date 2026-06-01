@@ -67,7 +67,8 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.model_picker.active or
             ctx.provider_picker.active or
             ctx.mcp_picker.active or
-            ctx.app.sessions.active;
+            ctx.app.sessions.active or
+            ctx.app.sessions.rename_active;
         if (!modal_open) ctx.app.toggleMode();
     } else if (key.matches(vaxis.Key.escape, .{})) {
         countCtrlPlusC -|= 1;
@@ -103,6 +104,12 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 
     if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(ctx.alloc, text);
+        return;
+    }
+
+    if (ctx.app.sessions.rename_active) {
+        try ctx.app.sessions.rename_input.appendSlice(ctx.alloc, text);
+        ctx.app.needs_redraw = true;
         return;
     }
 
@@ -198,6 +205,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             try ctx.app.initCMD();
             return .send;
         },
+        .rename => ctx.app.sessions.openRename(),
         .mcp => try ctx.mcp_picker.open(ctx.alloc, &ctx.app.mcp_registry, ctx.app.mcp_config),
         .exit => return .quit,
     }
@@ -214,11 +222,13 @@ fn handleEscape(ctx: *InputContext) !void {
     } else if (ctx.command_picker.active) {
         ctx.command_picker.reset(ctx.alloc);
     } else if (ctx.model_picker.active) {
-        ctx.model_picker.reset(ctx.alloc);
+        ctx.model_picker.reset();
     } else if (ctx.provider_picker.active) {
-        ctx.provider_picker.reset(ctx.alloc);
+        ctx.provider_picker.reset();
     } else if (ctx.mcp_picker.active) {
-        if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset(ctx.alloc);
+        if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset();
+    } else if (ctx.app.sessions.rename_active) {
+        ctx.app.sessions.resetRename();
     } else if (ctx.app.sessions.active) {
         ctx.app.sessions.reset();
     } else switch (ctx.app.mode) {
@@ -318,7 +328,10 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
 
 fn handleBackspace(ctx: *InputContext) !void {
     const alloc = ctx.alloc;
-    if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
+    if (ctx.app.sessions.rename_active) {
+        if (ctx.app.sessions.rename_input.items.len > 0)
+            _ = ctx.app.sessions.rename_input.orderedRemove(ctx.app.sessions.rename_input.items.len - 1);
+    } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         if (ctx.provider_picker.key_input.items.len > 0)
             _ = ctx.provider_picker.key_input.orderedRemove(ctx.provider_picker.key_input.items.len - 1);
     } else if (ctx.model_picker.active) {
@@ -350,7 +363,9 @@ fn handleBackspace(ctx: *InputContext) !void {
 fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
     resetExitState(ctx);
     const alloc = ctx.alloc;
-    if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
+    if (ctx.app.sessions.rename_active) {
+        try ctx.app.sessions.rename_input.appendSlice(alloc, txt);
+    } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(alloc, txt);
     } else if (ctx.model_picker.active) {
         try ctx.model_picker.query.appendSlice(alloc, txt);
@@ -385,6 +400,12 @@ fn handleEnter(ctx: *InputContext) !bool {
     const alloc = ctx.alloc;
     if (ctx.app.tool_confirmation.pending) {
         try ctx.app.resolveToolConfirmation(alloc, ctx.app.tool_confirmation.cursor);
+    } else if (ctx.app.sessions.rename_active) {
+        const new_name = std.mem.trim(u8, ctx.app.sessions.rename_input.items, " \t");
+        if (new_name.len > 0)
+            ctx.app.sessions.renameCurrent(new_name) catch {};
+        ctx.app.sessions.resetRename();
+        ctx.app.needs_redraw = true;
     } else if (ctx.command_picker.active) {
         var result: SlashResult = .none;
         if (ctx.command_picker.selectedCommand()) |cmd| {
@@ -433,7 +454,7 @@ fn handleEnter(ctx: *InputContext) !bool {
             }
         }
         agent.config.save(alloc, ctx.config.*) catch {};
-        ctx.model_picker.reset(alloc);
+        ctx.model_picker.reset();
     } else if (ctx.mcp_picker.active) {
         ctx.mcp_picker.enter();
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
@@ -447,11 +468,11 @@ fn handleEnter(ctx: *InputContext) !bool {
             if (ctx.config.providers.forProvider(provider_name)) |pc| pc.apiKey = new_key;
             agent.config.save(alloc, ctx.config.*) catch {};
         }
-        ctx.provider_picker.reset(alloc);
+        ctx.provider_picker.reset();
     } else if (ctx.app.sessions.active and ctx.app.sessions.entries.items.len > 0) {
         const selected = ctx.app.sessions.entries.items[ctx.app.sessions.selected];
         ctx.app.mutex.lock();
-        if (ctx.app.sessions.readFileContent(alloc, selected.filename)) |sess_ctx| {
+        if (ctx.app.sessions.readFileContent(selected.filename)) |sess_ctx| {
             ctx.app.clearHistory();
             ctx.app.messages.append(alloc, .{ .role = .user, .content = sess_ctx }) catch {};
             ctx.app.appendToHistory(alloc, sess_ctx) catch {};
@@ -483,8 +504,8 @@ fn handleEnter(ctx: *InputContext) !bool {
                 });
                 ctx.app.mutex.unlock();
 
-                ctx.app.sessions.appendFmt(alloc, "You: {s}", .{user_input});
-                ctx.app.sessions.appendFmt(alloc, "AI: \n{s}", .{assistant_content});
+                ctx.app.sessions.appendFmt("You: {s}", .{user_input});
+                ctx.app.sessions.appendFmt("AI: \n{s}", .{assistant_content});
 
                 assistant_content = &.{};
 

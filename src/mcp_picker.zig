@@ -52,8 +52,7 @@ pub const McpPicker = struct {
         self.entered_server = null;
     }
 
-    pub fn reset(self: *McpPicker, alloc: std.mem.Allocator) void {
-        _ = alloc;
+    pub fn reset(self: *McpPicker) void {
         self.active = false;
         self.phase = .servers;
         self.selected = 0;
