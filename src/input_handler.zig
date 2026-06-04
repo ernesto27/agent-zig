@@ -212,6 +212,11 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
         },
         .rename => ctx.app.sessions.openRename(),
         .mcp => try ctx.mcp_picker.open(ctx.alloc, &ctx.app.mcp_registry, ctx.app.mcp_config),
+        .sandbox => {
+            if (ctx.app.is_loading) return .none;
+            ctx.app.toggleSandbox(ctx.loop);
+            return .none;
+        },
         .exit => return .quit,
     }
     return .none;
@@ -524,6 +529,12 @@ fn handleEnter(ctx: *InputContext) !bool {
                 ctx.app.needs_redraw = true;
             },
             else => {
+                // Don't run tools on the host while the sandbox is still
+                // starting up — wait until it's active so they route inside it.
+                if (ctx.app.sandbox_busy) {
+                    ctx.app.appendNotice("🐳 sandbox is still starting — wait for \"sandbox ON\", then press Enter again");
+                    return false;
+                }
                 ctx.app.mutex.lock();
                 errdefer ctx.app.mutex.unlock();
 

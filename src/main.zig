@@ -300,10 +300,15 @@ pub fn main() !void {
         var branch_buf: [std.fs.max_path_bytes]u8 = undefined;
         const currentBranch = agent.utils.getCurrentGitBranch(&branch_buf) catch "";
         var header_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-        const header = if (currentBranch.len > 0)
+        const base_header = if (currentBranch.len > 0)
             std.fmt.bufPrint(&header_buf, "{s}:{s}", .{ cwd, currentBranch }) catch cwd
         else
             cwd;
+        var sandbox_header_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+        const header = if (app.sandbox.active)
+            std.fmt.bufPrint(&sandbox_header_buf, "{s}  🐳 sandbox", .{base_header}) catch base_header
+        else
+            base_header;
         ui.renderHeader(win, header);
 
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);

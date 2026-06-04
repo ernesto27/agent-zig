@@ -5,7 +5,7 @@ const agent = @import("agent");
 pub const MAX_RESULTS = 10;
 pub const SKILL_PREFIX = "skills:";
 
-pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, rename, exit };
+pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, rename, sandbox, exit };
 
 pub const Command = struct {
     name: []const u8,
@@ -23,6 +23,7 @@ pub const commands = [_]Command{
     .{ .name = "init", .description = "Create or update AGENTS.md", .action = .init },
     .{ .name = "mcp", .description = "List active MCP servers", .action = .mcp },
     .{ .name = "rename", .description = "Rename current session", .action = .rename },
+    .{ .name = "sandbox", .description = "Toggle Docker sandbox", .action = .sandbox },
     .{ .name = "exit", .description = "Exit the application", .action = .exit },
 };
 

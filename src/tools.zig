@@ -4,6 +4,7 @@ const message = @import("llm/message.zig");
 const skills = @import("skills.zig");
 const web = @import("tools/web.zig");
 const mcp_registry = @import("mcp/registry.zig");
+const sandbox_mod = @import("sandbox.zig");
 
 const log = std.log.scoped(.tools);
 
@@ -15,6 +16,9 @@ pub const ToolResult = struct {
 pub const Context = struct {
     skill_registry: ?*const skills.Registry = null,
     mcp_registry: ?*mcp_registry.McpRegistry = null,
+    /// When set and active, the filesystem tools run inside the sandbox
+    /// container (against the mounted worktree at /workspace) instead of the host.
+    sandbox: ?*sandbox_mod.Sandbox = null,
 };
 
 pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
@@ -331,24 +335,19 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
         }
     }
 
-    if (std.mem.eql(u8, tool_name, "read_file")) {
-        return readFile(allocator, input);
-    }
-    if (std.mem.eql(u8, tool_name, "write_file")) {
-        return writeFile(allocator, input);
-    }
-    if (std.mem.eql(u8, tool_name, "edit_file")) {
-        return editFile(allocator, input);
-    }
-    if (std.mem.eql(u8, tool_name, "bash")) {
-        return runBash(allocator, input);
-    }
-    if (std.mem.eql(u8, tool_name, "glob")) {
-        return runGlob(allocator, input);
-    }
-    if (std.mem.eql(u8, tool_name, "grep")) {
-        return runGrep(allocator, input);
-    }
+    // Filesystem tools are written once against `Exec`; pick the backend. When a
+    // sandbox is active they run in the container, otherwise natively on the host.
+    const exec: Exec = if (ctx.sandbox) |sb|
+        (if (sb.active) Exec{ .sandbox = sb } else .host)
+    else
+        .host;
+
+    if (std.mem.eql(u8, tool_name, "read_file")) return readTool(allocator, exec, input);
+    if (std.mem.eql(u8, tool_name, "write_file")) return writeTool(allocator, exec, input);
+    if (std.mem.eql(u8, tool_name, "edit_file")) return editTool(allocator, exec, input);
+    if (std.mem.eql(u8, tool_name, "bash")) return bashTool(allocator, exec, input);
+    if (std.mem.eql(u8, tool_name, "glob")) return globTool(allocator, exec, input);
+    if (std.mem.eql(u8, tool_name, "grep")) return grepTool(allocator, exec, input);
     if (std.mem.eql(u8, tool_name, "web_search")) {
         const result = web.search(allocator, input);
         return .{ .content = result.content, .is_error = result.is_error };
@@ -380,6 +379,134 @@ pub fn runBashCommand(allocator: std.mem.Allocator, command: []const u8) !ToolRe
     try tool_input.object.put("command", .{ .string = command });
 
     return execute(allocator, .{}, "bash", tool_input);
+}
+
+/// Where a filesystem tool runs: natively on the host (portable std.fs /
+/// std.process) or inside the sandbox container (shell via `docker exec`). Each
+/// tool below is written once against this; only the per-backend primitives differ.
+const Exec = union(enum) {
+    host,
+    sandbox: *sandbox_mod.Sandbox,
+
+    fn shell(self: Exec, allocator: std.mem.Allocator, command: []const u8) ToolResult {
+        return switch (self) {
+            .host => hostShell(allocator, command),
+            .sandbox => |sb| fromResult(sb.execShell(allocator, command)),
+        };
+    }
+
+    fn readFile(self: Exec, allocator: std.mem.Allocator, path: []const u8) ToolResult {
+        return switch (self) {
+            .host => hostReadFile(allocator, path),
+            .sandbox => |sb| fromResult(sb.runArgv(allocator, &.{ "cat", "--", sb.rel(path) })),
+        };
+    }
+
+    fn writeFile(self: Exec, allocator: std.mem.Allocator, path: []const u8, content: []const u8) ToolResult {
+        return switch (self) {
+            .host => hostWriteFile(allocator, path, content),
+            .sandbox => |sb| fromResult(sb.writeFile(allocator, sb.rel(path), content)),
+        };
+    }
+
+    fn glob(self: Exec, allocator: std.mem.Allocator, pattern: []const u8, path: []const u8) ToolResult {
+        return switch (self) {
+            .host => hostGlob(allocator, pattern, path),
+            .sandbox => |sb| sbxGlob(allocator, sb, pattern, path),
+        };
+    }
+
+    fn grep(self: Exec, allocator: std.mem.Allocator, pattern: []const u8, path: []const u8, include: ?[]const u8) ToolResult {
+        return switch (self) {
+            .host => hostGrep(allocator, pattern, path, include),
+            .sandbox => |sb| sbxGrep(allocator, sb, pattern, path, include),
+        };
+    }
+};
+
+fn fromResult(r: sandbox_mod.Result) ToolResult {
+    return .{ .content = r.content, .is_error = r.is_error };
+}
+
+// ---- Filesystem tools (backend-agnostic) --------------------------------
+// Each parses its input, then delegates to the active `Exec` backend.
+
+fn bashTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const command = getStringField(input, "command") orelse
+        return .{ .content = "Invalid input: expected { command: string }", .is_error = true };
+    log.info("running bash: {s}", .{command});
+    return exec.shell(allocator, command);
+}
+
+fn readTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const file_path = getStringField(input, "file_path") orelse
+        return .{ .content = "Invalid input: expected { file_path: string }", .is_error = true };
+    return exec.readFile(allocator, file_path);
+}
+
+fn writeTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const file_path = getStringField(input, "file_path");
+    const content = getStringField(input, "content");
+    if (file_path == null or content == null) {
+        return .{ .content = "Invalid input: expected { file_path: string, content: string }", .is_error = true };
+    }
+    return exec.writeFile(allocator, file_path.?, content.?);
+}
+
+/// One implementation for both backends: read via the backend, do the
+/// find/replace here, write back via the backend.
+fn editTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const file_path = getStringField(input, "file_path");
+    const old_string = getStringField(input, "old_string");
+    const new_string = getStringField(input, "new_string");
+    if (file_path == null or old_string == null or new_string == null) {
+        return .{ .content = "Invalid input: expected { file_path, old_string, new_string }", .is_error = true };
+    }
+
+    const read = exec.readFile(allocator, file_path.?);
+    if (read.is_error) return read; // transfer ownership of the error message
+    defer allocator.free(read.content);
+    const original = read.content;
+
+    const idx = std.mem.indexOf(u8, original, old_string.?) orelse {
+        const msg = std.fmt.allocPrint(allocator, "old_string not found in {s}", .{file_path.?}) catch
+            return .{ .content = "old_string not found", .is_error = true };
+        return .{ .content = msg, .is_error = true };
+    };
+    if (std.mem.indexOf(u8, original[idx + old_string.?.len ..], old_string.?) != null) {
+        return .{ .content = "old_string appears more than once — be more specific", .is_error = true };
+    }
+
+    const new_content = std.mem.concat(allocator, u8, &.{
+        original[0..idx],
+        new_string.?,
+        original[idx + old_string.?.len ..],
+    }) catch return .{ .content = "Out of memory", .is_error = true };
+    defer allocator.free(new_content);
+
+    const w = exec.writeFile(allocator, file_path.?, new_content);
+    if (w.is_error) return w;
+    allocator.free(w.content);
+    const result = std.fmt.allocPrint(allocator, "Successfully edited {s}", .{file_path.?}) catch
+        return .{ .content = "File edited" };
+    return .{ .content = result };
+}
+
+fn globTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const pattern = getStringField(input, "pattern") orelse
+        return .{ .content = "Invalid input: expected { pattern: string, path?: string }", .is_error = true };
+    if (pattern.len == 0) return .{ .content = "Pattern must not be empty", .is_error = true };
+    const path = getStringField(input, "path") orelse ".";
+    return exec.glob(allocator, pattern, path);
+}
+
+fn grepTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {
+    const pattern = getStringField(input, "pattern") orelse
+        return .{ .content = "Invalid input: expected { pattern: string, path?: string, include?: string }", .is_error = true };
+    if (pattern.len == 0) return .{ .content = "Pattern must not be empty", .is_error = true };
+    const path = getStringField(input, "path") orelse ".";
+    const include = getStringField(input, "include");
+    return exec.grep(allocator, pattern, path, include);
 }
 
 fn loadSkill(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
@@ -420,25 +547,16 @@ fn resolveSkillScript(allocator: std.mem.Allocator, ctx: Context, input: std.jso
     return .{ .content = resolved };
 }
 
-fn readFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const file_path = getStringField(input, "file_path");
-
-    if (file_path == null) {
-        return .{
-            .content = "Invalid input: expected { file_path: string }",
-            .is_error = true,
-        };
-    }
-
-    log.info("reading file: {s}", .{file_path.?});
+fn hostReadFile(allocator: std.mem.Allocator, file_path: []const u8) ToolResult {
+    log.info("reading file: {s}", .{file_path});
 
     const max_size = 1 * 1024 * 1024;
     const contents = blk: {
         // Support both absolute and relative paths
-        const file = (if (std.fs.path.isAbsolute(file_path.?))
-            std.fs.openFileAbsolute(file_path.?, .{})
+        const file = (if (std.fs.path.isAbsolute(file_path))
+            std.fs.openFileAbsolute(file_path, .{})
         else
-            std.fs.cwd().openFile(file_path.?, .{})) catch |err| {
+            std.fs.cwd().openFile(file_path, .{})) catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Error opening file: {}", .{err}) catch
                 return .{ .content = "Error opening file", .is_error = true };
             return .{ .content = msg, .is_error = true };
@@ -452,129 +570,40 @@ fn readFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
         };
     };
 
-    log.info("read {d} bytes from {s}", .{ contents.len, file_path.? });
+    log.info("read {d} bytes from {s}", .{ contents.len, file_path });
     return .{ .content = contents };
 }
 
-fn writeFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const file_path = getStringField(input, "file_path");
-    const content = getStringField(input, "content");
+fn hostWriteFile(allocator: std.mem.Allocator, file_path: []const u8, content: []const u8) ToolResult {
+    log.info("writing file: {s}", .{file_path});
 
-    if (file_path == null or content == null) {
-        return .{
-            .content = "Invalid input: expected { file_path: string, content: string }",
-            .is_error = true,
-        };
-    }
-
-    log.info("writing file: {s}", .{file_path.?});
-
-    const file = (if (std.fs.path.isAbsolute(file_path.?))
-        std.fs.createFileAbsolute(file_path.?, .{})
+    const file = (if (std.fs.path.isAbsolute(file_path))
+        std.fs.createFileAbsolute(file_path, .{})
     else
-        std.fs.cwd().createFile(file_path.?, .{})) catch |err| {
+        std.fs.cwd().createFile(file_path, .{})) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error creating file: {}", .{err}) catch
             return .{ .content = "Error creating file", .is_error = true };
         return .{ .content = msg, .is_error = true };
     };
     defer file.close();
 
-    file.writeAll(content.?) catch |err| {
+    file.writeAll(content) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error writing file: {}", .{err}) catch
             return .{ .content = "Error writing file", .is_error = true };
         return .{ .content = msg, .is_error = true };
     };
 
-    log.info("wrote {d} bytes to {s}", .{ content.?.len, file_path.? });
+    log.info("wrote {d} bytes to {s}", .{ content.len, file_path });
 
     const result = std.fmt.allocPrint(allocator, "Successfully wrote {d} bytes to {s}", .{
-        content.?.len,
-        file_path.?,
+        content.len,
+        file_path,
     }) catch return .{ .content = "File written", .is_error = false };
 
     return .{ .content = result };
 }
 
-fn editFile(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const file_path = getStringField(input, "file_path");
-    const old_string = getStringField(input, "old_string");
-    const new_string = getStringField(input, "new_string");
-
-    if (file_path == null or old_string == null or new_string == null) {
-        return .{
-            .content = "Invalid input: expected { file_path, old_string, new_string }",
-            .is_error = true,
-        };
-    }
-
-    log.info("editing file: {s}", .{file_path.?});
-
-    const max_size = 1 * 1024 * 1024;
-    const original = blk: {
-        const file = (if (std.fs.path.isAbsolute(file_path.?))
-            std.fs.openFileAbsolute(file_path.?, .{})
-        else
-            std.fs.cwd().openFile(file_path.?, .{})) catch |err| {
-            const msg = std.fmt.allocPrint(allocator, "Error opening file: {}", .{err}) catch
-                return .{ .content = "Error opening file", .is_error = true };
-            return .{ .content = msg, .is_error = true };
-        };
-        defer file.close();
-        break :blk file.readToEndAlloc(allocator, max_size) catch |err| {
-            const msg = std.fmt.allocPrint(allocator, "Error reading file: {}", .{err}) catch
-                return .{ .content = "Error reading file", .is_error = true };
-            return .{ .content = msg, .is_error = true };
-        };
-    };
-    defer allocator.free(original);
-
-    const idx = std.mem.indexOf(u8, original, old_string.?) orelse {
-        const msg = std.fmt.allocPrint(allocator, "old_string not found in {s}", .{file_path.?}) catch
-            return .{ .content = "old_string not found", .is_error = true };
-        return .{ .content = msg, .is_error = true };
-    };
-
-    if (std.mem.indexOf(u8, original[idx + old_string.?.len ..], old_string.?) != null) {
-        return .{
-            .content = "old_string appears more than once — be more specific",
-            .is_error = true,
-        };
-    }
-
-    const new_content = std.mem.concat(allocator, u8, &.{
-        original[0..idx],
-        new_string.?,
-        original[idx + old_string.?.len ..],
-    }) catch return .{ .content = "Out of memory", .is_error = true };
-    defer allocator.free(new_content);
-
-    const file = (if (std.fs.path.isAbsolute(file_path.?))
-        std.fs.createFileAbsolute(file_path.?, .{})
-    else
-        std.fs.cwd().createFile(file_path.?, .{})) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error opening file for write: {}", .{err}) catch
-            return .{ .content = "Error opening file for write", .is_error = true };
-        return .{ .content = msg, .is_error = true };
-    };
-    defer file.close();
-
-    file.writeAll(new_content) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error writing file: {}", .{err}) catch
-            return .{ .content = "Error writing file", .is_error = true };
-        return .{ .content = msg, .is_error = true };
-    };
-
-    log.info("edited {s}: replaced {d} bytes with {d} bytes", .{ file_path.?, old_string.?.len, new_string.?.len });
-
-    const result = std.fmt.allocPrint(allocator, "Successfully edited {s}", .{file_path.?}) catch
-        return .{ .content = "File edited", .is_error = false };
-    return .{ .content = result };
-}
-
-fn runBash(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const command = getStringField(input, "command") orelse return .{ .content = "Invalid input: expected { command: string }", .is_error = true };
-    log.info("running bash: {s}", .{command});
-
+fn hostShell(allocator: std.mem.Allocator, command: []const u8) ToolResult {
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "/bin/sh", "-c", command },
@@ -602,13 +631,43 @@ fn runBash(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
     return .{ .content = output, .is_error = exit_code != 0 };
 }
 
-fn runGlob(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const pattern = getStringField(input, "pattern") orelse return .{ .content = "Invalid input: expected { pattern: string, path?: string }", .is_error = true };
-    if (pattern.len == 0) {
-        return .{ .content = "Pattern must not be empty", .is_error = true };
-    }
+// ---- Sandbox (Docker) primitives ----------------------------------------
+// Container backends for glob/grep (shell `find`/`grep` via docker exec). bash,
+// read, write and edit reuse Sandbox.execShell/runArgv/writeFile directly from
+// the `Exec.sandbox` arm above. Returned content is owned by `allocator`.
 
-    const search_path = getStringField(input, "path") orelse ".";
+fn sbxGlob(allocator: std.mem.Allocator, sb: *sandbox_mod.Sandbox, pattern_raw: []const u8, path_raw: []const u8) ToolResult {
+    // `find -name` matches a basename at any depth; drop a leading "**/".
+    const pattern = if (std.mem.startsWith(u8, pattern_raw, "**/")) pattern_raw[3..] else pattern_raw;
+    const path = sb.rel(path_raw);
+
+    const r = sb.runArgv(allocator, &.{ "find", path, "-type", "f", "-name", pattern });
+    if (!r.is_error and r.content.len == 0) {
+        allocator.free(r.content);
+        return .{ .content = allocator.dupe(u8, "No matches found") catch "No matches found" };
+    }
+    return .{ .content = r.content, .is_error = r.is_error };
+}
+
+fn sbxGrep(allocator: std.mem.Allocator, sb: *sandbox_mod.Sandbox, pattern: []const u8, path_raw: []const u8, include: ?[]const u8) ToolResult {
+    const path = sb.rel(path_raw);
+
+    const r = if (include) |inc| blk: {
+        const inc_arg = std.fmt.allocPrint(allocator, "--include={s}", .{inc}) catch
+            return .{ .content = "Out of memory", .is_error = true };
+        defer allocator.free(inc_arg);
+        break :blk sb.runArgv(allocator, &.{ "grep", "-rn", inc_arg, "--", pattern, path });
+    } else sb.runArgv(allocator, &.{ "grep", "-rn", "--", pattern, path });
+
+    // grep exits 1 with no output when there are no matches — not an error.
+    if (r.content.len == 0) {
+        allocator.free(r.content);
+        return .{ .content = allocator.dupe(u8, "No matches found") catch "No matches found" };
+    }
+    return .{ .content = r.content, .is_error = r.is_error };
+}
+
+fn hostGlob(allocator: std.mem.Allocator, pattern: []const u8, search_path: []const u8) ToolResult {
     log.info("running glob: pattern='{s}' path='{s}'", .{ pattern, search_path });
 
     var matches = std.ArrayList([]u8){};
@@ -669,15 +728,7 @@ fn runGlob(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
     return .{ .content = owned };
 }
 
-fn runGrep(allocator: std.mem.Allocator, input: std.json.Value) ToolResult {
-    const pattern = getStringField(input, "pattern") orelse return .{ .content = "Invalid input: expected { pattern: string, path?: string, include?: string }", .is_error = true };
-    if (pattern.len == 0) {
-        return .{ .content = "Pattern must not be empty", .is_error = true };
-    }
-
-    const search_path = getStringField(input, "path") orelse ".";
-    const include = getStringField(input, "include");
-
+fn hostGrep(allocator: std.mem.Allocator, pattern: []const u8, search_path: []const u8, include: ?[]const u8) ToolResult {
     log.info("running grep: pattern='{s}' path='{s}'", .{ pattern, search_path });
 
     var out = std.ArrayList(u8){};

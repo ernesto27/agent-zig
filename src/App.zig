@@ -100,6 +100,15 @@ pub const App = struct {
     cancel_requested: bool = false,
     context_usage: context_usage_mod.contextUsage = .{},
     mode: Mode = .{ .build = .{} },
+    sandbox: agent.sandbox.Sandbox = .{},
+    sandbox_busy: bool = false,
+    // Handle for the background start/stop worker. Kept (not detached) so deinit
+    // can join it — a slow image pull/worktree create must not outlive the app
+    // and touch freed state. Mirrors `mcp_load_thread`.
+    sandbox_thread: ?std.Thread = null,
+    // Always set from config.cfg.dockerImage in init(); the default lives in
+    // config.zig (Config.dockerImage), so don't duplicate the literal here.
+    docker_image: []const u8 = "",
 
     const Self = @This();
     const log = std.log.scoped(.app);
@@ -135,6 +144,7 @@ pub const App = struct {
             .mcp_registry = agent.mcp.registry.McpRegistry.init(alloc),
             .system_prompt = sp,
             .sessions = sess,
+            .docker_image = config.cfg.dockerImage,
         };
     }
 
@@ -303,7 +313,90 @@ pub const App = struct {
         self.needs_redraw = true;
     }
 
+    pub fn appendNotice(self: *Self, content: []const u8) void {
+        const owned = self.alloc.dupe(u8, content) catch return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.messages.append(self.alloc, .{ .role = .notice, .content = owned }) catch {
+            self.alloc.free(owned);
+            return;
+        };
+        self.needs_redraw = true;
+    }
+
+    /// Toggle the Docker sandbox. When on, the filesystem tools run inside a
+    /// container bound to a fresh git worktree on a new branch (under
+    /// ~/.config/agent-zig/worktrees) — the main repo checkout is never touched.
+    /// Starting creates the worktree, then launches the container with it
+    /// bind-mounted (the image pull on first run can be slow), so the work runs on
+    /// a background thread to keep the TUI responsive.
+    pub fn toggleSandbox(self: *Self, loop: *EventLoop) void {
+        if (self.sandbox_busy) return;
+
+        // Reap the previous (now-finished) worker so its handle can be reused.
+        // Safe: sandbox_busy is false here, so it isn't running.
+        if (self.sandbox_thread) |t| {
+            t.join();
+            self.sandbox_thread = null;
+        }
+
+        // Already running → just say so; the sandbox stays up for the rest of the
+        // session (it's torn down on exit in deinit).
+        if (self.sandbox.active) {
+            const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox already running on branch {s} at {s}", .{ self.sandbox.branch, self.sandbox.worktree_path }) catch null;
+            if (msg) |m| {
+                defer self.alloc.free(m);
+                self.appendNotice(m);
+            } else self.appendNotice("🐳 sandbox already running");
+            return;
+        }
+
+        self.sandbox_busy = true;
+        self.appendNotice("🐳 starting sandbox (first run may pull the image)…");
+
+        // Keep the handle (don't detach) so deinit can join it.
+        self.sandbox_thread = std.Thread.spawn(.{}, sandboxWork, .{ self, loop }) catch {
+            // Spawn failed — fall back to running inline (blocks, but works).
+            self.sandbox_thread = null;
+            self.sandboxWork(loop);
+            return;
+        };
+    }
+
+    /// Background worker: start the sandbox, post the result, redraw.
+    fn sandboxWork(self: *Self, loop: *EventLoop) void {
+        defer {
+            self.sandbox_busy = false;
+            wakeLoop(loop);
+        }
+
+        const cwd = std.fs.cwd().realpathAlloc(self.alloc, ".") catch {
+            self.appendNotice("🐳 sandbox: could not resolve current directory");
+            return;
+        };
+        defer self.alloc.free(cwd);
+
+        self.sandbox.start(self.alloc, self.docker_image, cwd) catch |err| {
+            const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox failed to start: {s} (is Docker installed and running?)", .{@errorName(err)}) catch {
+                self.appendNotice("🐳 sandbox failed to start");
+                return;
+            };
+            defer self.alloc.free(msg);
+            self.appendNotice(msg);
+            return;
+        };
+        const on_msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox ON — branch {s} at {s} (main repo untouched)", .{ self.sandbox.branch, self.sandbox.worktree_path }) catch null;
+        if (on_msg) |m| {
+            defer self.alloc.free(m);
+            self.appendNotice(m);
+        } else self.appendNotice("🐳 sandbox ON");
+    }
+
     pub fn deinit(self: *Self) void {
+        // Wait for any in-flight sandbox start/stop before tearing down the state
+        // it touches (self.sandbox, self.messages, self.alloc).
+        if (self.sandbox_thread) |t| t.join();
+        self.sandbox.stop(self.alloc);
         self.freeMessages();
         self.messages.deinit(self.alloc);
         self.llm_history.deinit(self.alloc);
@@ -627,6 +720,7 @@ pub const App = struct {
         const tool_ctx = agent.tools.Context{
             .skill_registry = &self.skill_registry,
             .mcp_registry = &self.mcp_registry,
+            .sandbox = &self.sandbox,
         };
         const tool_defs = agent.tools.getDefinitions(arena_alloc, tool_ctx) catch &.{};
 

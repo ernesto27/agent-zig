@@ -61,6 +61,7 @@ pub const Config = struct {
     providers: Providers = .{},
     sessions: []const SessionEntry = &.{},
     mcpServers: std.json.Value = .null,
+    dockerImage: []const u8 = "ubuntu:24.04",
 };
 
 /// Owns the loaded config along with the allocator and parse arena backing it.

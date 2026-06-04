@@ -12,7 +12,7 @@
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
 [] - show preview of sessions
-[] - save think in config.json
+[x] - save think in config.json
 [] - command to copy to clipboar current session
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
@@ -64,9 +64,18 @@ hs doing
 [] - drag stop working
 [] - somethimes code preview does not show 
 [] - refactor providers llms services
+[] - (low priority / cosmetic) pick ONE convention for method-bearing structs: `const Self = @This();` (App.zig, sandbox.zig) vs spelling out the type name (config.zig ConfigStore, command_picker.zig). Apply to new code; normalize a file only when already editing it.
 [] - when think or executing show time counter
 [] - save conversations to resume
 [] - add arena options to have two models or more doint same task in paraller
+
+## Sandbox (Docker)
+
+[x] - /sandbox command: run tool actions in a Docker container on a git worktree branch
+[] - commit worktree changes on the branch when the task finishes (auto-commit in container, e.g. on /sandbox off), so results land as a real commit instead of just uncommitted working-tree changes
+[] - show a diff/summary of what changed when the sandbox stops
+[] - configurable commit message (default: task summary) for the finish-task commit
+[] - merge-back helper: command to merge the sandbox branch into the current branch
 
 ## MCP - missing features (real gaps, ranked)
 
