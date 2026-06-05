@@ -1,95 +1,42 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Source Of Truth
 
-## Workflow
+- `src/system_prompt.zig` loads `src/prompts/system.txt` and then the first repo instruction file it finds. Keep this file short and repo-specific because it is injected into app prompts.
+- Trust `build.zig` and current `src/` wiring over prose docs. Some repo docs are stale relative to the implementation.
 
-Always ask for approval before applying code changes in real-time, unless explicitly told otherwise.
+## Build And Verify
 
-## Project Overview
+- Use `zig build` to compile the app.
+- Use `zig build run` to launch the TUI.
+- Use `zig build test` for verification. `build.zig` defines two test executables and the `test` step runs both the library module (`src/root.zig`) and the app module (`src/main.zig`).
+- There is no repo-local lint/format/typecheck script beyond Zig build/test steps.
+- Release CI builds a Linux musl binary with `zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseFast --prefix dist/linux`.
 
-Zigent is a terminal-based AI coding agent (inspired by [OpenCode](https://github.com/sst/opencode)) written in Zig. It provides a TUI chat interface that talks to LLMs and can execute coding tools (file read/write, shell commands, etc.).
+## Runtime Config
 
-## Build & Run
+- Config auto-creates at `~/.config/agent-zig/config.json` on first run.
+- Real persisted state lives under `~/.config/agent-zig/`: `config.json`, `agent.log`, `crash.log`, `sessions/`, and sandbox worktrees under `worktrees/`.
+- Tavily-backed `web_search` / `web_extract` only work if built with `-Dtavily-api-key="..."`; otherwise they fail at runtime.
+- MCP servers are configured in `config.json` under `mcpServers`; the app loads them asynchronously at startup.
 
-```bash
-zig build              # Build the executable (output: zig-out/bin/agent)
-zig build run          # Build and run the TUI app
-zig build test         # Run all tests (both library and executable modules)
-```
+## Code Map
 
-Requires **Zig 0.15.2+**. Dependencies (libvaxis) are fetched automatically by the build system.
+- `src/main.zig` is the TUI entrypoint and event loop.
+- `src/root.zig` is the reusable `agent` module exported to the app and tests.
+- `src/App.zig` owns most runtime state: messages, sessions, skills, MCP registry, sandbox, tool confirmation, and LLM request lifecycle.
+- `src/input_handler.zig` wires most user-visible behavior: slash commands, mode switching, shell mode, provider/model pickers, and session actions.
+- `src/tools.zig` is the built-in tool registry/executor; when sandbox is active, filesystem tools and bash are routed through Docker there.
+- `src/config.zig` is the source of truth for config shape and persisted defaults.
 
-### Mock LLM Server
+## Behavior That Is Easy To Miss
 
-A Node.js mock server mimics the Anthropic Messages API for local development:
+- Modes are not just UI labels. `Shift+Tab` toggles `build <-> plan`; typing a leading `!` switches to shell mode and removes the `!` from input; `Esc` exits shell mode back to build mode.
+- Plan mode is effectively read-only. In `src/modes/plan.zig`, `write_file` and `edit_file` are blocked, and `bash` is also blocked in practice because `isSafeBash()` currently always returns `false`.
+- `/sandbox` does not mutate the main checkout. It creates a fresh git worktree and branch under `~/.config/agent-zig/worktrees/<repo>/sandbox-<timestamp>`, starts Docker against that worktree, and keeps the worktree/branch after the container stops.
+- Logs never go to stderr; inspect `~/.config/agent-zig/agent.log` and `crash.log` when debugging startup, TUI, or panic issues.
+- Session history is file-backed under `~/.config/agent-zig/sessions/*.log`; `/resume`, `/fork`, and rename behavior are backed by `src/sessions.zig` plus entries persisted in `config.json`.
 
-```bash
-cd mock-server && node server.js    # Runs on http://localhost:9999
-```
+## UI Commands
 
-Endpoints: `POST /v1/messages` (streaming + non-streaming), `GET /health`.
-
-## Architecture
-
-The project has two Zig modules defined in `build.zig`:
-
-- **`agent` module** (`src/root.zig`) — Library module for reusable business logic. Exposes `llm`, `markdown`, and utility helpers via `@import("agent")`.
-- **Executable root** (`src/main.zig`) — The TUI application. Imports `agent`, `vaxis`, and all UI modules. Contains the event loop, input handling, and slash command dispatch.
-
-The TUI uses [libvaxis](https://github.com/rockorager/libvaxis) 0.5.1 for terminal rendering and event handling.
-
-## Source Files
-
-```
-src/
-├── main.zig              # Entry point, event loop, keybindings
-├── App.zig               # App state: messages, LLM client, tool confirmation, spinner
-├── root.zig              # agent module root (re-exports llm, markdown, etc.)
-├── config.zig            # Config: reads ~/.config/agent-zig/config.json (apiKey, baseUrl, model)
-├── layout.zig            # TUI layout helpers
-├── ui.zig                # Chat rendering, message display
-├── markdown.zig          # Markdown → styled terminal lines renderer
-├── tools.zig             # Tool registry and executor (read_file, write_file, edit_file, bash, glob, grep)
-├── at_picker.zig         # @ file picker widget
-├── command_picker.zig    # / slash command picker widget (/provider, /model)
-├── model_picker.zig      # Model picker widget
-├── provider_picker.zig   # Provider picker widget
-├── chat_selection.zig    # Chat history selection
-└── llm/
-    ├── client.zig        # HTTP LLM client (streaming SSE, tool calls, thinking, cancellation)
-    ├── message.zig       # Message types: role, content blocks, tool definitions, effort
-    └── providers.zig     # Provider/model registry (Anthropic, OpenAI)
-```
-
-## Current Features
-
-- **LLM connectivity**: Streaming responses via SSE from Anthropic and OpenAI APIs
-- **Multi-provider support**: Anthropic (Claude Opus/Sonnet/Haiku) and OpenAI (GPT-4o, o3, o4-mini)
-- **Thinking support**: Extended thinking display for supported models
-- **Tool system**: `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep` — with approve/deny/accept_all confirmation UI for mutating tools and preview panels for search tools
-- **Markdown rendering**: Styled output in the chat area
-- **Spinner**: Loading indicator during LLM generation
-- **Cancellation**: Esc cancels in-flight LLM requests
-- **Slash commands**: `/provider`, `/model` to switch providers and models at runtime
-- **@ file picker**: Attach files to messages
-- **Logging**: File-based logger (written to disk, not terminal)
-
-## Configuration
-
-Config is read from `~/.config/agent-zig/config.json`:
-
-```json
-{
-  "apiKey": "sk-...",
-  "baseUrl": "https://api.anthropic.com",
-  "model": "claude-sonnet-4-6"
-}
-```
-
-## Key Conventions
-
-- **Allocator**: Uses `GeneralPurposeAllocator` at the top level. All heap-allocating functions receive an allocator parameter (standard Zig pattern).
-- **ArrayList pattern**: Uses `std.ArrayList(T){}` with explicit allocator passed to each method call (not stored in the struct), per Vaxis conventions.
-- **Target**: Single static binary with zero runtime dependencies.
-- **Logging**: Use `std.log.scoped(.scope_name)` — logs go to a file, not stderr, to avoid polluting the TUI.
+- Slash commands currently include `/provider`, `/model`, `/clear`, `/compact`, `/fork`, `/resume`, `/init`, `/mcp`, `/rename`, `/sandbox`, and `/exit` (`src/commands/command_picker.zig`).
