@@ -345,7 +345,10 @@ pub fn main() !void {
             auto_scroll = true;
         }
 
-        const start = ui.renderChatLines(chat_win, rendered_lines, scroll_offset);
+        const start = if (app.messages.items.len == 0) blk: {
+            ui.renderWelcome(chat_win, app.skill_registry, config_store.cfg.mcpServers);
+            break :blk 0;
+        } else ui.renderChatLines(chat_win, rendered_lines, scroll_offset);
 
         if (selection.bounds(rendered_lines)) |bounds| {
             var visible_row: usize = 0;

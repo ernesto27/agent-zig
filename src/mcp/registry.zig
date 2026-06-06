@@ -15,7 +15,7 @@
 const std = @import("std");
 const client_mod = @import("client.zig");
 const message = @import("../llm/message.zig");
-const json_helpers = @import("../json_helpers.zig");
+const config = @import("../config.zig");
 
 const McpClient = client_mod.McpClient;
 
@@ -32,8 +32,8 @@ pub const ServerState = enum { loading, connected, failed };
 /// Heap-allocated context handed to each loader thread. Freed by the thread.
 const LoadCtx = struct {
     reg: *McpRegistry,
-    name: []const u8, // borrowed from the config json.Value (outlives the registry)
-    cfg: std.json.Value,
+    name: []const u8, // borrowed from the config map keys (outlive the registry)
+    cfg: config.McpServerConfig, // slices borrowed from the config arena
 };
 
 pub const McpRegistry = struct {
@@ -98,9 +98,8 @@ pub const McpRegistry = struct {
     /// for hosted HTTP servers) happens on the per-server threads, so no single
     /// server can stall the others. Safe to call from `App.loadMcpServers`'s
     /// background thread.
-    pub fn loadFromConfig(self: *McpRegistry, mcp_servers: std.json.Value) !void {
-        if (mcp_servers != .object) return;
-        var it = mcp_servers.object.iterator();
+    pub fn loadFromConfig(self: *McpRegistry, mcp_servers: config.McpServers) !void {
+        var it = mcp_servers.map.iterator();
         while (it.next()) |entry| {
             const name = entry.key_ptr.*;
             const cfg = entry.value_ptr.*;
@@ -328,29 +327,12 @@ fn loadOne(ctx: *LoadCtx) void {
 fn connectClient(
     allocator: std.mem.Allocator,
     name: []const u8,
-    cfg: std.json.Value,
+    cfg: config.McpServerConfig,
 ) !?*McpClient {
-    if (json_helpers.getStringField(cfg, "command")) |command| {
-        var args_list: std.ArrayList([]const u8) = .{};
-        defer args_list.deinit(allocator);
-        if (json_helpers.getField(cfg, "args")) |a| if (a == .array) {
-            for (a.array.items) |item| {
-                if (item == .string) try args_list.append(allocator, item.string);
-            }
-        };
-        return try McpClient.spawnStdio(allocator, name, command, args_list.items);
-    } else if (json_helpers.getStringField(cfg, "url")) |url| {
-        var hdrs: std.ArrayList(std.http.Header) = .{};
-        defer hdrs.deinit(allocator);
-        if (json_helpers.getObjectField(cfg, "headers")) |h| if (h == .object) {
-            var hit = h.object.iterator();
-            while (hit.next()) |he| {
-                if (he.value_ptr.* == .string) {
-                    try hdrs.append(allocator, .{ .name = he.key_ptr.*, .value = he.value_ptr.*.string });
-                }
-            }
-        };
-        return try McpClient.connectHttp(allocator, name, url, hdrs.items);
+    if (cfg.command.len > 0) {
+        return try McpClient.spawnStdio(allocator, name, cfg.command, cfg.args);
+    } else if (cfg.url.len > 0) {
+        return try McpClient.connectHttp(allocator, name, cfg.url, &.{});
     }
     log.warn("mcpServers.{s}: needs 'command' or 'url', skipping", .{name});
     return null;

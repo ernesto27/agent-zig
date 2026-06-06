@@ -11,14 +11,16 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - mouse wheel scroll for attachment preview panel
+[] - add brave for searching
 [] - show preview of sessions
 [] - save session in jsonl
-[] - on start TUI show this info [Context]
+[] - on start TUI show this info 
+[Context]
   AGENTS.md
 [Skills]
   caveman, commit-push, find-skills, update-todo, zig-best-practices, zig-review
-[Extensions]
-  zig-fmt-check.t
+[MCPs]
+  list
 [x] - save think in config.json
 [] - command to copy to clipboar current session
 [x] - only accept attach of images

@@ -19,7 +19,7 @@ pub const McpPicker = struct {
     server_names: std.ArrayList([]const u8) = .{},
     entered_server: ?[]const u8 = null,
     mcp_registry: ?*agent.mcp.registry.McpRegistry = null,
-    mcp_config: std.json.Value = .null,
+    mcp_config: agent.config.McpServers = .{},
     count_text_buf: [MAX_SERVERS][COUNT_TEXT_CAP]u8 = undefined,
     title_buf: [64]u8 = undefined,
 
@@ -35,16 +35,14 @@ pub const McpPicker = struct {
         self: *McpPicker,
         alloc: std.mem.Allocator,
         registry: *agent.mcp.registry.McpRegistry,
-        cfg: std.json.Value,
+        cfg: agent.config.McpServers,
     ) !void {
         self.mcp_registry = registry;
         self.mcp_config = cfg;
         self.server_names.clearRetainingCapacity();
-        if (cfg == .object) {
-            var it = cfg.object.iterator();
-            while (it.next()) |entry| {
-                try self.server_names.append(alloc, entry.key_ptr.*);
-            }
+        var it = cfg.map.iterator();
+        while (it.next()) |entry| {
+            try self.server_names.append(alloc, entry.key_ptr.*);
         }
         self.active = true;
         self.selected = 0;
@@ -59,7 +57,7 @@ pub const McpPicker = struct {
         self.entered_server = null;
         self.server_names.clearRetainingCapacity();
         self.mcp_registry = null;
-        self.mcp_config = .null;
+        self.mcp_config = .{};
     }
 
     pub fn enter(self: *McpPicker) void {

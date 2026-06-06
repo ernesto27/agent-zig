@@ -81,7 +81,7 @@ pub const App = struct {
     mcp_registry: agent.mcp.registry.McpRegistry,
     // Borrowed view of config.mcpServers — its arena outlives App (owned by
     // main.zig's parsed_config). Used by /mcp to show "configured" vs "live".
-    mcp_config: std.json.Value = .null,
+    mcp_config: agent.config.McpServers = .{},
     // Thread running the (slow) MCP server spawn + initialize. Joined on
     // App.deinit so we don't leak the thread or race with shutdownAll.
     mcp_load_thread: ?std.Thread = null,
@@ -151,7 +151,7 @@ pub const App = struct {
     /// Spawn and initialize every configured MCP server. Called from main
     /// after `App.init` because the config isn't available to `init`.
     /// Failures are logged per-server and don't block startup.
-    pub fn loadMcpServers(self: *Self, mcp_servers: std.json.Value) void {
+    pub fn loadMcpServers(self: *Self, mcp_servers: agent.config.McpServers) void {
         // Store the config view immediately so /mcp can show "configured"
         // entries (with status=loading) before the loader thread finishes.
         self.mcp_config = mcp_servers;

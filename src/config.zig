@@ -56,11 +56,25 @@ pub const SessionEntry = struct {
     file: []const u8 = "",
 };
 
+/// One `mcpServers` entry from config.json. A server is either stdio
+/// (`command` + `args`) or http (`type` = "http" + `url`); the unused fields
+/// stay at their empty defaults.
+pub const McpServerConfig = struct {
+    @"type": []const u8 = "",
+    command: []const u8 = "",
+    args: []const []const u8 = &.{},
+    url: []const u8 = "",
+};
+
+/// The whole `mcpServers` block: a name-keyed map of server configs, matching
+/// the JSON object `{ "<name>": { ... } }`. Iterate via `.map`.
+pub const McpServers = std.json.ArrayHashMap(McpServerConfig);
+
 /// Pure data record — maps 1:1 to config.json. No behavior, no allocator.
 pub const Config = struct {
     providers: Providers = .{},
     sessions: []const SessionEntry = &.{},
-    mcpServers: std.json.Value = .null,
+    mcpServers: McpServers = .{},
     dockerImage: []const u8 = "ubuntu:24.04",
 };
 

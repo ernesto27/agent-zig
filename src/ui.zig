@@ -504,6 +504,54 @@ pub fn renderHeader(win: vaxis.Window, cwd: []const u8) void {
     }, .{ .row_offset = 0, .col_offset = @intCast(title.len) });
 }
 
+pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: agent.config.McpServers) void {
+    const header_style = vaxis.Style{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true };
+    const item_style = vaxis.Style{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } };
+
+    var row: u16 = 1;
+
+    // [Context]
+    if (row >= win.height) return;
+    _ = win.printSegment(.{ .text = "[Context]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    row += 1;
+    if (row >= win.height) return;
+    _ = win.printSegment(.{ .text = "  AGENTS.md", .style = item_style }, .{ .row_offset = row, .col_offset = 1 });
+    row += 1;
+
+    // [Skills]
+    if (row >= win.height) return;
+    _ = win.printSegment(.{ .text = "[Skills]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    row += 1;
+    if (row >= win.height) return;
+    var col: u16 = 3;
+    for (skills.skills.items, 0..) |skill, idx| {
+        if (idx > 0) {
+            const sep = win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = col });
+            col = sep.col;
+        }
+        const res = win.printSegment(.{ .text = skill.name, .style = item_style }, .{ .row_offset = row, .col_offset = col });
+        col = res.col;
+    }
+    row += 1;
+
+    // [MCPs]
+    if (row >= win.height) return;
+    _ = win.printSegment(.{ .text = "[MCPs]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    row += 1;
+    if (row >= win.height) return;
+    var mcp_col: u16 = 3;
+    var mcp_it = mcps.map.iterator();
+    var mcp_idx: usize = 0;
+    while (mcp_it.next()) |entry| : (mcp_idx += 1) {
+        if (mcp_idx > 0) {
+            const sep = win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
+            mcp_col = sep.col;
+        }
+        const res = win.printSegment(.{ .text = entry.key_ptr.*, .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
+        mcp_col = res.col;
+    }
+}
+
 pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_offset: usize) usize {
     const chat_h = chat_win.height;
     const total_lines = rendered_lines.len;
