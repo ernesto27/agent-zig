@@ -13,8 +13,6 @@ pub const SystemPrompt = struct {
     }
 
     pub fn readContent(self: *SystemPrompt, allocator: std.mem.Allocator) !void {
-        self.deinit(allocator);
-
         const base_file = try std.fs.cwd().openFile("src/prompts/system.txt", .{});
         defer base_file.close();
         self.content = try base_file.readToEndAlloc(allocator, 1024 * 1024);

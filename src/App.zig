@@ -201,7 +201,10 @@ pub const App = struct {
                 .content_blocks => |blocks| {
                     for (blocks) |b| {
                         if (b.text) |t| self.alloc.free(t);
-                        if (b.source) |src| self.alloc.free(src.data);
+                        if (b.source) |src| {
+                            self.alloc.free(src.data);
+                            if (src.path) |p| self.alloc.free(p);
+                        }
                     }
                     self.alloc.free(blocks);
                 },
@@ -213,6 +216,33 @@ pub const App = struct {
     pub fn appendToHistory(self: *Self, alloc: std.mem.Allocator, text: []const u8) !void {
         const content = try alloc.dupe(u8, text);
         try self.llm_history.append(alloc, .{ .role = .user, .content = .{ .text = content } });
+    }
+
+    fn pushHistory(self: *Self, alloc: std.mem.Allocator, msg: agent.llm.Message) void {
+        self.llm_history.append(alloc, msg) catch |err| {
+            log.err("failed to append to llm_history: {}", .{err});
+        };
+        self.sessions.appendMessage(msg);
+    }
+
+    pub fn resumeSession(self: *Self, alloc: std.mem.Allocator, filename: []const u8) void {
+        const records = self.sessions.parseSessionFile(alloc, filename) catch |err| {
+            log.err("failed to parse session {s}: {}", .{ filename, err });
+            return;
+        };
+        defer alloc.free(records);
+
+        self.clearHistory();
+        for (records) |rec| {
+            const ui_role: Role = if (rec.role == .assistant) .assistant else .user;
+            self.messages.append(alloc, .{ .role = ui_role, .content = rec.text }) catch {
+                alloc.free(rec.text);
+                continue;
+            };
+            const dup = alloc.dupe(u8, rec.text) catch continue;
+            self.llm_history.append(alloc, .{ .role = rec.role, .content = .{ .text = dup } }) catch alloc.free(dup);
+        }
+        self.needs_redraw = true;
     }
 
     fn messagesToString(self: *Self) ![]u8 {
@@ -646,7 +676,7 @@ pub const App = struct {
                     const b64 = image_attach.encodeFileBase64(alloc, path) catch continue;
                     image_blocks.append(alloc, .{
                         .type = "image",
-                        .source = .{ .media_type = mime, .data = b64 },
+                        .source = .{ .media_type = mime, .data = b64, .path = alloc.dupe(u8, path) catch null },
                     }) catch {
                         alloc.free(b64);
                         continue;
@@ -696,19 +726,16 @@ pub const App = struct {
 
         switch (user_text) {
             .text_only => |t| {
-                self.llm_history.append(alloc, .{
+                self.pushHistory(alloc, .{
                     .role = .user,
                     .content = .{ .text = t },
-                }) catch {};
-                self.sessions.appendFmt("You: {s}", .{t});
+                });
             },
             .with_images => |blocks| {
-                self.llm_history.append(alloc, .{
+                self.pushHistory(alloc, .{
                     .role = .user,
                     .content = .{ .content_blocks = blocks },
-                }) catch {};
-                const txt = if (blocks[0].text) |t| t else "(image)";
-                self.sessions.appendFmt("You: {s} [+image]", .{txt});
+                });
             },
         }
         self.mutex.unlock();
@@ -821,11 +848,10 @@ pub const App = struct {
                 if (text_buf.items.len > 0) {
                     const duped = alloc.dupe(u8, text_buf.items) catch break;
                     self.mutex.lock();
-                    self.llm_history.append(alloc, .{
+                    self.pushHistory(alloc, .{
                         .role = .assistant,
                         .content = .{ .text = duped },
-                    }) catch {};
-                    self.sessions.appendFmt("AI: \n{s}", .{duped});
+                    });
                     self.mutex.unlock();
                 }
                 break;
@@ -851,10 +877,10 @@ pub const App = struct {
                     .input = input_copy,
                 };
             }
-            self.llm_history.append(alloc, .{
+            self.pushHistory(alloc, .{
                 .role = .assistant,
                 .content = .{ .content_blocks = content_blocks },
-            }) catch {};
+            });
 
             // Execute each tool
             const tool_results = alloc.alloc(agent.llm.message.ToolResultBlock, tool_uses.items.len) catch break;
@@ -1023,10 +1049,10 @@ pub const App = struct {
             }
 
             // Append tool results as user message, loop back
-            self.llm_history.append(alloc, .{
+            self.pushHistory(alloc, .{
                 .role = .user,
                 .content = .{ .tool_result_blocks = tool_results },
-            }) catch {};
+            });
 
             if (any_denied) break;
 

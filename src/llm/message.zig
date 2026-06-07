@@ -109,6 +109,8 @@ pub const ImageSource = struct {
     type: []const u8 = "base64",
     media_type: []const u8,
     data: []const u8,
+    /// Source file path, kept for session logging only (never sent to the API).
+    path: ?[]const u8 = null,
 };
 
 pub const ContentBlock = struct {

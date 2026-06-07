@@ -2,6 +2,7 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const modal_list = @import("modal_list.zig");
 const config = @import("agent").config;
+const llm = @import("agent").llm;
 
 const log = std.log.scoped(.sessions);
 
@@ -11,6 +12,115 @@ const YOU_PREFIX = "You: ";
 
 fn stripYouPrefix(text: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, text, YOU_PREFIX)) text[YOU_PREFIX.len..] else text;
+}
+
+const SessionHeader = struct {
+    type: []const u8 = "session",
+    version: u32 = 1,
+    id: []const u8,
+    timestamp: i64,
+    cwd: []const u8,
+};
+
+const RecordRole = enum { user, assistant, toolResult };
+
+const MessageRecord = struct {
+    type: []const u8 = "message",
+    role: RecordRole,
+    content: llm.message.MessageContent,
+    timestamp: i64,
+
+    pub fn jsonStringify(self: MessageRecord, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write(self.type);
+        try jw.objectField("role");
+        try jw.write(self.role);
+        try jw.objectField("content");
+        try writeSessionContent(self.content, jw);
+        try jw.objectField("timestamp");
+        try jw.write(self.timestamp);
+        try jw.endObject();
+    }
+};
+
+fn writeSessionContent(content: llm.message.MessageContent, jw: anytype) !void {
+    switch (content) {
+        .text => |t| try jw.write(t),
+        .tool_result_blocks => |blocks| {
+            try jw.beginArray();
+            for (blocks) |b| try jw.write(b);
+            try jw.endArray();
+        },
+        .content_blocks => |blocks| {
+            try jw.beginArray();
+            for (blocks) |b| {
+                if (std.mem.eql(u8, b.type, "image")) {
+                    try jw.beginObject();
+                    try jw.objectField("type");
+                    try jw.write("image");
+                    if (b.source) |src| {
+                        if (src.path) |p| {
+                            try jw.objectField("path");
+                            try jw.write(p);
+                        }
+                    }
+                    try jw.endObject();
+                } else {
+                    try jw.write(b);
+                }
+            }
+            try jw.endArray();
+        },
+    }
+}
+
+fn recordRole(msg: llm.Message) RecordRole {
+    return switch (msg.content) {
+        .tool_result_blocks => .toolResult,
+        else => switch (msg.role) {
+            .user => .user,
+            .assistant => .assistant,
+        },
+    };
+}
+
+pub const ResumeMessage = struct { role: llm.Role, text: []const u8 };
+
+fn extractText(content: std.json.Value) []const u8 {
+    switch (content) {
+        .string => |s| return s,
+        .array => |arr| {
+            for (arr.items) |item| {
+                if (item != .object) continue;
+                const ty = item.object.get("type") orelse continue;
+                if (ty != .string or !std.mem.eql(u8, ty.string, "text")) continue;
+                const tv = item.object.get("text") orelse continue;
+                if (tv == .string) return tv.string;
+            }
+            return "";
+        },
+        else => return "",
+    }
+}
+
+fn sessionIdFromFilename(filename: []const u8) []const u8 {
+    const base = if (std.mem.lastIndexOfScalar(u8, filename, '.')) |dot| filename[0..dot] else filename;
+    if (std.mem.lastIndexOfScalar(u8, base, '-')) |dash| return base[dash + 1 ..];
+    return base;
+}
+
+fn displayName(msg: llm.Message) []const u8 {
+    return switch (msg.content) {
+        .text => |t| t,
+        .content_blocks => |blocks| blk: {
+            for (blocks) |b| {
+                if (b.text) |t| break :blk t;
+            }
+            break :blk "session";
+        },
+        .tool_result_blocks => "session",
+    };
 }
 
 pub const Sessions = struct {
@@ -87,7 +197,7 @@ pub const Sessions = struct {
         var iter = dir.iterate();
         while (try iter.next()) |entry| {
             if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".log")) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".jsonl")) continue;
             const stat = dir.statFile(entry.name) catch continue;
             const name_copy = try allocator.dupe(u8, entry.name);
             const display = self.nameForFile(name_copy) orelse {
@@ -129,7 +239,7 @@ pub const Sessions = struct {
         }
 
         self.pending_path = try self.createPendingPath();
-        self.appendFmt("{s}", .{text});
+        self.appendMessage(.{ .role = .user, .content = .{ .text = text } });
     }
 
     fn createPendingPath(self: *Sessions) ![]const u8 {
@@ -192,14 +302,24 @@ pub const Sessions = struct {
     fn readFirstLine(allocator: std.mem.Allocator, dir: std.fs.Dir, name: []const u8) ![]const u8 {
         var file = try dir.openFile(name, .{});
         defer file.close();
-        var buf: [80]u8 = undefined;
-        const n = try file.read(&buf);
-        if (n == 0) return error.Empty;
-        const line = std.mem.sliceTo(buf[0..n], '\n');
-        if (line.len == 0) return error.Empty;
-        const trimmed = stripYouPrefix(line);
-        if (trimmed.len == 0) return error.Empty;
-        return allocator.dupe(u8, trimmed);
+        const bytes = try file.readToEndAlloc(allocator, 64 * 1024);
+        defer allocator.free(bytes);
+
+        var it = std.mem.splitScalar(u8, bytes, '\n');
+        while (it.next()) |line| {
+            if (line.len == 0) continue;
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
+            defer parsed.deinit();
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+            const t = obj.get("type") orelse continue;
+            if (t != .string or !std.mem.eql(u8, t.string, "message")) continue;
+            const content = obj.get("content") orelse continue;
+            const text = extractText(content);
+            if (text.len == 0) continue;
+            return allocator.dupe(u8, text);
+        }
+        return error.Empty;
     }
 
     fn generateFilename(allocator: std.mem.Allocator) ![]const u8 {
@@ -216,7 +336,6 @@ pub const Sessions = struct {
         const day_secs = epoch_secs.getDaySeconds();
         const hour: u8 = @intCast(day_secs.secs / 3600);
         const minute: u8 = @intCast((day_secs.secs % 3600) / 60);
-        const second: u8 = @intCast(day_secs.secs % 60);
 
         var rand_bytes: [4]u8 = undefined;
         std.crypto.random.bytes(&rand_bytes);
@@ -224,8 +343,8 @@ pub const Sessions = struct {
 
         return std.fmt.allocPrint(
             allocator,
-            "{d:0>2}-{d:0>2}-{d}-{d:0>2}:{d:0>2}:{d:0>2}-{s}.log",
-            .{ day, month, year, hour, minute, second, hex },
+            "{d:0>2}-{d:0>2}-{d}-{d:0>2}:{d:0>2}-{s}.jsonl",
+            .{ day, month, year, hour, minute, hex },
         );
     }
 
@@ -323,21 +442,20 @@ pub const Sessions = struct {
         }, .{ .row_offset = 4, .col_offset = 2 });
     }
 
-    pub fn readFileContent(self: *Sessions, filename: []const u8) ![]const u8 {
-        const allocator = self.allocator;
+    pub fn parseSessionFile(self: *Sessions, alloc: std.mem.Allocator, filename: []const u8) ![]ResumeMessage {
         const max_bytes = 10 * 1024 * 1024;
-        const dir_path = try sessionsDir(allocator);
-        defer allocator.free(dir_path);
-        const path = try std.fs.path.join(allocator, &.{ dir_path, filename });
-        defer allocator.free(path);
+        const dir_path = try sessionsDir(alloc);
+        defer alloc.free(dir_path);
+        const path = try std.fs.path.join(alloc, &.{ dir_path, filename });
+        defer alloc.free(path);
         const f = try std.fs.openFileAbsolute(path, .{ .mode = .read_write });
-        const content = f.readToEndAlloc(allocator, max_bytes) catch |err| {
+        const content = f.readToEndAlloc(alloc, max_bytes) catch |err| {
             f.close();
             return err;
         };
+        defer alloc.free(content);
         f.seekFromEnd(0) catch |err| {
             f.close();
-            allocator.free(content);
             return err;
         };
         if (self.file) |old| old.close();
@@ -348,7 +466,33 @@ pub const Sessions = struct {
         if (self.current_filename) |name| self.allocator.free(name);
         self.current_filename = try self.allocator.dupe(u8, filename);
         self.file = f;
-        return content;
+
+        var list = std.ArrayListUnmanaged(ResumeMessage){};
+        errdefer {
+            for (list.items) |m| alloc.free(m.text);
+            list.deinit(alloc);
+        }
+
+        var it = std.mem.splitScalar(u8, content, '\n');
+        while (it.next()) |line| {
+            if (line.len == 0) continue;
+            const parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch continue;
+            defer parsed.deinit();
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+            const t = obj.get("type") orelse continue;
+            if (t != .string or !std.mem.eql(u8, t.string, "message")) continue;
+            const role_val = obj.get("role") orelse continue;
+            if (role_val != .string) continue;
+            if (std.mem.eql(u8, role_val.string, "toolResult")) continue;
+            const content_val = obj.get("content") orelse continue;
+            const text = extractText(content_val);
+            if (text.len == 0) continue;
+            const role: llm.Role = if (std.mem.eql(u8, role_val.string, "assistant")) .assistant else .user;
+            try list.append(alloc, .{ .role = role, .text = try alloc.dupe(u8, text) });
+        }
+
+        return list.toOwnedSlice(alloc);
     }
 
     pub fn renameCurrent(self: *Sessions, new_name: []const u8) !void {
@@ -369,20 +513,31 @@ pub const Sessions = struct {
         }
     }
 
-    pub fn appendFmt(self: *Sessions, comptime fmt: []const u8, args: anytype) void {
-        const allocator = self.allocator;
-        const text = std.fmt.allocPrint(allocator, fmt, args) catch return;
-        defer allocator.free(text);
+    fn writeHeader(self: *Sessions, filename: []const u8) void {
+        const f = self.file orelse return;
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd = std.fs.cwd().realpath(".", &cwd_buf) catch ".";
+        const header = SessionHeader{
+            .id = sessionIdFromFilename(filename),
+            .timestamp = std.time.milliTimestamp(),
+            .cwd = cwd,
+        };
+        const json = std.json.Stringify.valueAlloc(self.allocator, header, .{}) catch return;
+        defer self.allocator.free(json);
+        f.writeAll(json) catch {};
+        f.writeAll("\n") catch {};
+    }
 
+    pub fn appendMessage(self: *Sessions, msg: llm.Message) void {
         if (self.file == null) {
             if (self.pending_path) |path| {
                 self.file = std.fs.createFileAbsolute(path, .{}) catch return;
                 const filename = std.fs.path.basename(path);
                 if (self.current_filename) |name| self.allocator.free(name);
                 self.current_filename = self.allocator.dupe(u8, filename) catch null;
+                self.writeHeader(filename);
                 if (self.config_ref) |cfg| {
-                    const name = stripYouPrefix(text);
-                    cfg.createSession(filename, name) catch |err| {
+                    cfg.createSession(filename, displayName(msg)) catch |err| {
                         log.err("failed to create session config entry: {}", .{err});
                     };
                     self.config_sessions = cfg.cfg.sessions;
@@ -390,7 +545,15 @@ pub const Sessions = struct {
             } else return;
         }
         const f = self.file orelse return;
-        f.writeAll(text) catch {};
+
+        const record = MessageRecord{
+            .role = recordRole(msg),
+            .content = msg.content,
+            .timestamp = std.time.milliTimestamp(),
+        };
+        const json = std.json.Stringify.valueAlloc(self.allocator, record, .{}) catch return;
+        defer self.allocator.free(json);
+        f.writeAll(json) catch {};
         f.writeAll("\n") catch {};
     }
 };

@@ -483,16 +483,8 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.app.sessions.active and ctx.app.sessions.entries.items.len > 0) {
         const selected = ctx.app.sessions.entries.items[ctx.app.sessions.selected];
         ctx.app.mutex.lock();
-        if (ctx.app.sessions.readFileContent(selected.filename)) |sess_ctx| {
-            ctx.app.clearHistory();
-            ctx.app.messages.append(alloc, .{ .role = .user, .content = sess_ctx }) catch {};
-            ctx.app.appendToHistory(alloc, sess_ctx) catch {};
-            ctx.app.mutex.unlock();
-            std.log.info("session content:\n{s}", .{sess_ctx});
-        } else |err| {
-            ctx.app.mutex.unlock();
-            std.log.err("failed to read session: {}", .{err});
-        }
+        ctx.app.resumeSession(alloc, selected.filename);
+        ctx.app.mutex.unlock();
         ctx.app.sessions.reset();
     } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0) and !ctx.app.is_loading) {
         switch (ctx.app.mode) {
@@ -515,8 +507,8 @@ fn handleEnter(ctx: *InputContext) !bool {
                 });
                 ctx.app.mutex.unlock();
 
-                ctx.app.sessions.appendFmt("You: {s}", .{user_input});
-                ctx.app.sessions.appendFmt("AI: \n{s}", .{assistant_content});
+                ctx.app.sessions.appendMessage(.{ .role = .user, .content = .{ .text = user_input } });
+                ctx.app.sessions.appendMessage(.{ .role = .assistant, .content = .{ .text = assistant_content } });
 
                 assistant_content = &.{};
 

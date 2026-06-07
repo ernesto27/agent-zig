@@ -14,7 +14,7 @@
 [] - add brave for searching
 [] - show preview of sessions
 [] - save session in jsonl
-[] - on start TUI show this info 
+[x] - on start TUI show this info 
 [Context]
   AGENTS.md
 [Skills]
@@ -65,7 +65,7 @@
 [] - when do some change or edit, explain what ihi
 hs doing
 [x] - command show,  is overlap with content text
-[] - save in config.json thinking choosen
+[x] - save in config.json thinking choosen
 [] - when paste message large ,  format
 [] - when update files only show diff changes, not all file
 [] - init command
