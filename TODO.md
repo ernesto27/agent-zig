@@ -13,7 +13,7 @@
 [] - mouse wheel scroll for attachment preview panel
 [] - add brave for searching
 [] - show preview of sessions
-[] - save session in jsonl
+[x] - save session in jsonl
 [x] - on start TUI show this info 
 [Context]
   AGENTS.md
@@ -29,7 +29,7 @@
 [] - export data to html
 [] - share session using gist
 [] - rename session
-[] - show nice date created in session
+[x] - show nice date created in session
 [x] - add a system prompt
 [] - add command tu run as cli query
 [] - option to replace systemp prompt
