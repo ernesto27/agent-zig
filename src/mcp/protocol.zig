@@ -160,3 +160,110 @@ pub fn frameFromValue(v: std.json.Value) IncomingFrame {
     }
     return f;
 }
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "buildRequest emits jsonrpc, id, method and params" {
+    const alloc = testing.allocator;
+    const body = try buildRequest(alloc, 7, "tools/list", .{ .cursor = "abc" });
+    defer alloc.free(body);
+
+    try testing.expect(std.mem.indexOf(u8, body, "\"jsonrpc\":\"2.0\"") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "\"id\":7") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "\"method\":\"tools/list\"") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "\"cursor\":\"abc\"") != null);
+}
+
+test "buildNotification has no id field" {
+    const alloc = testing.allocator;
+    const body = try buildNotification(alloc, "notifications/initialized", .{});
+    defer alloc.free(body);
+
+    try testing.expect(std.mem.indexOf(u8, body, "\"method\":\"notifications/initialized\"") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "\"id\"") == null);
+}
+
+fn frameOf(alloc: std.mem.Allocator, json: []const u8) !std.json.Parsed(std.json.Value) {
+    return std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+}
+
+test "frameFromValue reads a response (id + result)" {
+    const alloc = testing.allocator;
+    const parsed = try frameOf(alloc,
+        \\{"jsonrpc":"2.0","id":3,"result":{"ok":true}}
+    );
+    defer parsed.deinit();
+
+    const f = frameFromValue(parsed.value);
+    try testing.expectEqual(@as(?i64, 3), f.id);
+    try testing.expect(f.result != null);
+    try testing.expect(f.err == null);
+}
+
+test "frameFromValue reads a notification (method, no id)" {
+    const alloc = testing.allocator;
+    const parsed = try frameOf(alloc,
+        \\{"jsonrpc":"2.0","method":"tools/list_changed"}
+    );
+    defer parsed.deinit();
+
+    const f = frameFromValue(parsed.value);
+    try testing.expect(f.id == null);
+    try testing.expectEqualStrings("tools/list_changed", f.method.?);
+}
+
+test "frameFromValue reads an error object" {
+    const alloc = testing.allocator;
+    const parsed = try frameOf(alloc,
+        \\{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+    );
+    defer parsed.deinit();
+
+    const f = frameFromValue(parsed.value);
+    try testing.expectEqual(@as(i64, -32601), f.err.?.code);
+    try testing.expectEqualStrings("Method not found", f.err.?.message);
+}
+
+test "frameFromValue on non-object yields an empty frame" {
+    const alloc = testing.allocator;
+    const parsed = try frameOf(alloc, "[1,2,3]");
+    defer parsed.deinit();
+
+    const f = frameFromValue(parsed.value);
+    try testing.expect(f.id == null and f.method == null and f.result == null and f.err == null);
+}
+
+test "matchResponse returns the parsed frame on id match" {
+    const alloc = testing.allocator;
+    const got = try matchResponse(alloc,
+        \\{"jsonrpc":"2.0","id":42,"result":{"value":1}}
+    , 42, "test");
+    try testing.expect(got != null);
+    got.?.deinit();
+}
+
+test "matchResponse surfaces RpcError for a matching error response" {
+    const alloc = testing.allocator;
+    try testing.expectError(error.RpcError, matchResponse(alloc,
+        \\{"jsonrpc":"2.0","id":42,"error":{"code":-1,"message":"boom"}}
+    , 42, "test"));
+}
+
+test "matchResponse keeps reading (null) for other ids, notifications and junk" {
+    const alloc = testing.allocator;
+
+    const other = try matchResponse(alloc,
+        \\{"jsonrpc":"2.0","id":99,"result":{}}
+    , 42, "test");
+    try testing.expect(other == null);
+
+    const notif = try matchResponse(alloc,
+        \\{"jsonrpc":"2.0","method":"ping"}
+    , 42, "test");
+    try testing.expect(notif == null);
+
+    const junk = try matchResponse(alloc, "not json at all", 42, "test");
+    try testing.expect(junk == null);
+}

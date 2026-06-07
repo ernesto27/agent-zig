@@ -56,3 +56,39 @@ pub fn findModel(id: []const u8) ?FindResult {
     }
     return null;
 }
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "findModel locates a model and its owning provider" {
+    const found = findModel("claude-opus-4-6").?;
+    try testing.expectEqualStrings("Anthropic", found.provider.name);
+    try testing.expectEqualStrings("Claude Opus 4.6", found.model.display);
+    try testing.expect(found.model.supports_thinking);
+}
+
+test "findModel resolves provider isolation for same-named lookups across providers" {
+    try testing.expectEqualStrings("OpenAI", findModel("gpt-5.5").?.provider.name);
+    try testing.expectEqualStrings("DeepSeek", findModel("deepseek-v4-pro").?.provider.name);
+}
+
+test "findModel returns null for unknown id" {
+    try testing.expect(findModel("does-not-exist") == null);
+    try testing.expect(findModel("") == null);
+}
+
+test "Model defaults apply when fields omitted" {
+    const haiku = findModel("claude-haiku-4-5-20251001").?.model;
+    try testing.expect(!haiku.supports_thinking); // default false
+    try testing.expectEqual(@as(u32, 200_000), haiku.max_context); // default
+}
+
+test "every model id is unique across all providers" {
+    for (&providers) |*p| {
+        for (p.models) |*m| {
+            // A duplicate id would resolve to the first provider, not this one.
+            try testing.expectEqual(p, findModel(m.id).?.provider);
+        }
+    }
+}

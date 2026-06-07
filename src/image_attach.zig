@@ -65,8 +65,76 @@ pub fn encodeFileBase64(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return out;
 }
 
+const testing = std.testing;
+
 test "mimeFromPath" {
-    try std.testing.expectEqualStrings("image/png", mimeFromPath("a.png").?);
-    try std.testing.expectEqualStrings("image/jpeg", mimeFromPath("X.JPG").?);
-    try std.testing.expect(mimeFromPath("foo.zig") == null);
+    try testing.expectEqualStrings("image/png", mimeFromPath("a.png").?);
+    try testing.expectEqualStrings("image/jpeg", mimeFromPath("X.JPG").?);
+    try testing.expect(mimeFromPath("foo.zig") == null);
+}
+
+test "mimeFromPath covers all supported types and ignores case and directories" {
+    try testing.expectEqualStrings("image/jpeg", mimeFromPath("photo.jpeg").?);
+    try testing.expectEqualStrings("image/gif", mimeFromPath("anim.GIF").?);
+    try testing.expectEqualStrings("image/webp", mimeFromPath("/abs/dir/pic.webp").?);
+    try testing.expect(mimeFromPath("noext") == null);
+    try testing.expect(mimeFromPath("archive.png.txt") == null); // extension is .txt
+}
+
+test "canUseLocalPathPreview is png-only, case-insensitive" {
+    try testing.expect(canUseLocalPathPreview("shot.png"));
+    try testing.expect(canUseLocalPathPreview("SHOT.PNG"));
+    try testing.expect(!canUseLocalPathPreview("shot.jpg"));
+    try testing.expect(!canUseLocalPathPreview("shot"));
+}
+
+fn pngHeader(width: u32, height: u32) [24]u8 {
+    var header = [_]u8{0} ** 24;
+    const signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+    @memcpy(header[0..8], &signature);
+    @memcpy(header[12..16], "IHDR");
+    std.mem.writeInt(u32, header[16..20], width, .big);
+    std.mem.writeInt(u32, header[20..24], height, .big);
+    return header;
+}
+
+test "pngInfoFromPath reads dimensions from a valid header" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const header = pngHeader(800, 600);
+    try tmp.dir.writeFile(.{ .sub_path = "ok.png", .data = &header });
+    const path = try tmp.dir.realpathAlloc(alloc, "ok.png");
+    defer alloc.free(path);
+
+    const info = try pngInfoFromPath(path);
+    try testing.expectEqual(@as(u16, 800), info.width);
+    try testing.expectEqual(@as(u16, 600), info.height);
+}
+
+test "pngInfoFromPath clamps oversized dimensions to u16 max" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const header = pngHeader(70000, 1); // 70000 > u16 max
+    try tmp.dir.writeFile(.{ .sub_path = "big.png", .data = &header });
+    const path = try tmp.dir.realpathAlloc(alloc, "big.png");
+    defer alloc.free(path);
+
+    const info = try pngInfoFromPath(path);
+    try testing.expectEqual(@as(u16, std.math.maxInt(u16)), info.width);
+}
+
+test "pngInfoFromPath rejects a non-png header" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "fake.png", .data = "this is not a png file!!" });
+    const path = try tmp.dir.realpathAlloc(alloc, "fake.png");
+    defer alloc.free(path);
+
+    try testing.expectError(error.InvalidPngHeader, pngInfoFromPath(path));
 }

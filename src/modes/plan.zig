@@ -39,3 +39,42 @@ pub const PlanMode = struct {
         return false;
     }
 };
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "plan mode allows read-only and research tools" {
+    const plan = PlanMode{};
+    const allowed = [_][]const u8{
+        "read_file", "glob", "grep", "web_search", "web_extract", "skill", "skill_resource",
+    };
+    for (allowed) |name| {
+        try testing.expect(plan.isToolAllowed(name, .null).ok);
+    }
+}
+
+test "plan mode blocks mutating tools with a reason" {
+    const plan = PlanMode{};
+    const write = plan.isToolAllowed("write_file", .null);
+    try testing.expect(!write.ok);
+    try testing.expect(write.reason.len > 0);
+
+    try testing.expect(!plan.isToolAllowed("edit_file", .null).ok);
+}
+
+test "plan mode blocks bash even with a command (isSafeBash stub returns false)" {
+    const plan = PlanMode{};
+    const alloc = testing.allocator;
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc,
+        \\{"command":"ls -la"}
+    , .{});
+    defer parsed.deinit();
+
+    try testing.expect(!plan.isToolAllowed("bash", parsed.value).ok);
+}
+
+test "plan mode denies unknown tools by default" {
+    const plan = PlanMode{};
+    try testing.expect(!plan.isToolAllowed("some_future_tool", .null).ok);
+}

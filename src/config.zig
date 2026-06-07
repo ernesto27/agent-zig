@@ -251,3 +251,46 @@ fn ensureConfigExists(allocator: std.mem.Allocator) !void {
         log.info("created config template at: {s}", .{path});
     };
 }
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "Effort.next cycles through every level and wraps to none" {
+    try testing.expectEqual(Effort.low, Effort.none.next());
+    try testing.expectEqual(Effort.medium, Effort.low.next());
+    try testing.expectEqual(Effort.high, Effort.medium.next());
+    try testing.expectEqual(Effort.max, Effort.high.next());
+    try testing.expectEqual(Effort.none, Effort.max.next()); // wraps
+}
+
+test "Effort.label shows off for none, tag name otherwise" {
+    try testing.expectEqualStrings("off", Effort.none.label());
+    try testing.expectEqualStrings("low", Effort.low.label());
+    try testing.expectEqualStrings("max", Effort.max.label());
+}
+
+test "Effort.apiValue round-trips through stringToEnum for every variant" {
+    // thinkEffort() relies on this: whatever apiValue() persists must parse back.
+    // Note none->"none" (not "off"), which is why apiValue differs from label.
+    inline for (std.meta.tags(Effort)) |variant| {
+        const parsed = std.meta.stringToEnum(Effort, variant.apiValue());
+        try testing.expectEqual(variant, parsed.?);
+    }
+    try testing.expectEqualStrings("none", Effort.none.apiValue());
+}
+
+test "Providers.forProvider maps known names and rejects unknown" {
+    var providers = Providers{};
+    try testing.expectEqual(&providers.anthropic, providers.forProvider("Anthropic").?);
+    try testing.expectEqual(&providers.openai, providers.forProvider("OpenAI").?);
+    try testing.expectEqual(&providers.deepseek, providers.forProvider("DeepSeek").?);
+    try testing.expect(providers.forProvider("Unknown") == null);
+    try testing.expect(providers.forProvider("anthropic") == null); // case-sensitive
+}
+
+test "Providers default base URLs" {
+    var providers = Providers{};
+    try testing.expectEqualStrings("https://api.anthropic.com", providers.forProvider("Anthropic").?.baseUrl);
+    try testing.expectEqualStrings("https://api.deepseek.com/anthropic", providers.forProvider("DeepSeek").?.baseUrl);
+}

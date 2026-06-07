@@ -8,12 +8,6 @@ const log = std.log.scoped(.sessions);
 
 const FileEntry = struct { filename: []const u8, preview: []const u8, date: []const u8 };
 
-const YOU_PREFIX = "You: ";
-
-fn stripYouPrefix(text: []const u8) []const u8 {
-    return if (std.mem.startsWith(u8, text, YOU_PREFIX)) text[YOU_PREFIX.len..] else text;
-}
-
 const SessionHeader = struct {
     type: []const u8 = "session",
     version: u32 = 1,
@@ -294,7 +288,7 @@ pub const Sessions = struct {
     fn nameForFile(self: *const Sessions, file: []const u8) ?[]const u8 {
         for (self.config_sessions) |s| {
             if (std.mem.eql(u8, s.file, file))
-                return stripYouPrefix(s.name);
+                return s.name;
         }
         return null;
     }
@@ -557,3 +551,36 @@ pub const Sessions = struct {
         f.writeAll("\n") catch {};
     }
 };
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "sessionIdFromFilename extracts trailing id after dropping extension" {
+    try testing.expectEqualStrings("abc123", sessionIdFromFilename("2026-06-07-120000-abc123.log"));
+    try testing.expectEqualStrings("noextension", sessionIdFromFilename("noextension"));
+    try testing.expectEqualStrings("id", sessionIdFromFilename("plain-id.jsonl"));
+}
+
+test "plural follows English count rule" {
+    try testing.expectEqualStrings("", Sessions.plural(1));
+    try testing.expectEqualStrings("s", Sessions.plural(0));
+    try testing.expectEqualStrings("s", Sessions.plural(2));
+}
+
+test "relativeTime buckets recent and future timestamps" {
+    const alloc = testing.allocator;
+    const now: i128 = std.time.nanoTimestamp();
+
+    const future = try Sessions.relativeTime(alloc, now + 10 * std.time.ns_per_s);
+    defer alloc.free(future);
+    try testing.expectEqualStrings("just now", future); // negative diff clamps to 0
+
+    const recent = try Sessions.relativeTime(alloc, now - 10 * std.time.ns_per_s);
+    defer alloc.free(recent);
+    try testing.expectEqualStrings("just now", recent);
+
+    const minutes = try Sessions.relativeTime(alloc, now - 90 * std.time.ns_per_s);
+    defer alloc.free(minutes);
+    try testing.expectEqualStrings("1 minute ago", minutes);
+}

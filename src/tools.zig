@@ -972,3 +972,49 @@ fn isProbablyBinary(contents: []const u8) bool {
     }
     return false;
 }
+
+// === Tests ===
+
+const testing = std.testing;
+
+test "globMatchesPath single segment wildcard does not cross directories" {
+    try testing.expect(globMatchesPath("*.zig", "main.zig"));
+    try testing.expect(globMatchesPath("src/*.zig", "src/main.zig"));
+    try testing.expect(!globMatchesPath("*.zig", "src/main.zig")); // * stops at '/'
+    try testing.expect(!globMatchesPath("*.zig", "main.txt"));
+}
+
+test "globMatchesPath ** spans directory boundaries" {
+    try testing.expect(globMatchesPath("**/*.zig", "a/b/c.zig"));
+    try testing.expect(globMatchesPath("src/**", "src/a/b.zig"));
+    try testing.expect(globMatchesPath("**", "anything/at/all.txt"));
+    try testing.expect(globMatchesPath("src/**/*.zig", "src/x.zig")); // ** can match zero segments
+}
+
+test "globMatchesPath ignores surrounding slashes" {
+    try testing.expect(globMatchesPath("/src/main.zig/", "src/main.zig"));
+}
+
+test "matchSegment handles literals and embedded wildcards" {
+    try testing.expect(matchSegment("*", "anything"));
+    try testing.expect(matchSegment("*", "")); // * matches empty
+    try testing.expect(matchSegment("a*c", "abc"));
+    try testing.expect(matchSegment("a*c", "ac")); // * matches zero chars
+    try testing.expect(!matchSegment("abc", "abd"));
+    try testing.expect(!matchSegment("abc", "ab"));
+}
+
+test "matchesInclude rule variants" {
+    try testing.expect(matchesInclude("any/path.txt", null)); // no rule -> all
+    try testing.expect(matchesInclude("src/main.zig", "*.zig"));
+    try testing.expect(!matchesInclude("src/main.txt", "*.zig"));
+    try testing.expect(matchesInclude("README.md", ".md")); // leading-dot rule
+    try testing.expect(matchesInclude("src/Makefile", "Makefile")); // basename match
+    try testing.expect(!matchesInclude("src/other", "Makefile"));
+}
+
+test "isProbablyBinary detects NUL bytes" {
+    try testing.expect(isProbablyBinary("abc\x00def"));
+    try testing.expect(!isProbablyBinary("hello world"));
+    try testing.expect(!isProbablyBinary(""));
+}
