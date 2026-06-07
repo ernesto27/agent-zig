@@ -504,7 +504,7 @@ pub fn renderHeader(win: vaxis.Window, cwd: []const u8) void {
     }, .{ .row_offset = 0, .col_offset = @intCast(title.len) });
 }
 
-pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: agent.config.McpServers) void {
+pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: agent.config.McpServers, has_agents_md: bool) void {
     const header_style = vaxis.Style{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true };
     const item_style = vaxis.Style{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } };
 
@@ -515,7 +515,9 @@ pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: age
     _ = win.printSegment(.{ .text = "[Context]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
     if (row >= win.height) return;
-    _ = win.printSegment(.{ .text = "  AGENTS.md", .style = item_style }, .{ .row_offset = row, .col_offset = 1 });
+    if (has_agents_md) {
+        _ = win.printSegment(.{ .text = "  AGENTS.md", .style = item_style }, .{ .row_offset = row, .col_offset = 1 });
+    }
     row += 1;
 
     // [Skills]

@@ -346,7 +346,7 @@ pub fn main() !void {
         }
 
         const start = if (app.messages.items.len == 0) blk: {
-            ui.renderWelcome(chat_win, app.skill_registry, config_store.cfg.mcpServers);
+            ui.renderWelcome(chat_win, app.skill_registry, config_store.cfg.mcpServers, app.system_prompt.agents_md_exists);
             break :blk 0;
         } else ui.renderChatLines(chat_win, rendered_lines, scroll_offset);
 

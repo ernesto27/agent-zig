@@ -56,6 +56,8 @@ pub const SessionEntry = struct {
     file: []const u8 = "",
 };
 
+pub const HttpHeaders = std.json.ArrayHashMap([]const u8);
+
 /// One `mcpServers` entry from config.json. A server is either stdio
 /// (`command` + `args`) or http (`type` = "http" + `url`); the unused fields
 /// stay at their empty defaults.
@@ -64,6 +66,7 @@ pub const McpServerConfig = struct {
     command: []const u8 = "",
     args: []const []const u8 = &.{},
     url: []const u8 = "",
+    headers: HttpHeaders = .{},
 };
 
 /// The whole `mcpServers` block: a name-keyed map of server configs, matching

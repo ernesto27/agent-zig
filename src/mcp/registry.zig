@@ -332,8 +332,46 @@ fn connectClient(
     if (cfg.command.len > 0) {
         return try McpClient.spawnStdio(allocator, name, cfg.command, cfg.args);
     } else if (cfg.url.len > 0) {
-        return try McpClient.connectHttp(allocator, name, cfg.url, &.{});
+        const headers = try buildHttpHeaders(allocator, cfg.headers);
+        defer freeHttpHeaders(allocator, headers);
+        return try McpClient.connectHttp(allocator, name, cfg.url, headers);
     }
     log.warn("mcpServers.{s}: needs 'command' or 'url', skipping", .{name});
     return null;
+}
+
+fn buildHttpHeaders(
+    allocator: std.mem.Allocator,
+    header_map: config.HttpHeaders,
+) ![]std.http.Header {
+    const count = header_map.map.count();
+    if (count == 0) return &.{};
+
+    const headers = try allocator.alloc(std.http.Header, count);
+    errdefer allocator.free(headers);
+
+    var built: usize = 0;
+    errdefer for (headers[0..built]) |header| {
+        allocator.free(header.name);
+        allocator.free(header.value);
+    };
+
+    var it = header_map.map.iterator();
+    while (it.next()) |entry| {
+        headers[built] = .{
+            .name = try allocator.dupe(u8, entry.key_ptr.*),
+            .value = try allocator.dupe(u8, entry.value_ptr.*),
+        };
+        built += 1;
+    }
+
+    return headers;
+}
+
+fn freeHttpHeaders(allocator: std.mem.Allocator, headers: []std.http.Header) void {
+    for (headers) |header| {
+        allocator.free(header.name);
+        allocator.free(header.value);
+    }
+    allocator.free(headers);
 }
