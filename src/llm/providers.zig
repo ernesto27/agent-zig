@@ -46,6 +46,14 @@ pub const providers = [_]Provider{
             .{ .id = "deepseek-v4-pro", .display = "DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_000_000 },
         },
     },
+    .{
+        .name = "Gemini",
+        .models = &[_]Model{
+            .{ .id = "gemini-2.5-pro", .display = "Gemini 2.5 Pro", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "gemini-2.5-flash", .display = "Gemini 2.5 Flash", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "gemini-2.5-flash-lite", .display = "Gemini 2.5 Flash Lite", .max_context = 1_048_576 },
+        },
+    },
 };
 
 pub fn findModel(id: []const u8) ?FindResult {
