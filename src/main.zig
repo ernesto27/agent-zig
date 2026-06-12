@@ -15,6 +15,7 @@ const mcp_picker_mod = @import("mcp_picker.zig");
 const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
 const attach_preview = @import("attach_preview.zig");
+const update = @import("update.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -33,6 +34,24 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+
+    const args = try std.process.argsAlloc(alloc);
+    defer std.process.argsFree(alloc, args);
+
+    if (args.len > 1) {
+        const cmd = args[1];
+
+        if (std.mem.eql(u8, cmd, "update")) {
+            update.run(alloc) catch |err| {
+                std.debug.print("update failed: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            return;
+        }
+
+        std.debug.print("unknown command: {s}\n", .{cmd});
+        std.process.exit(1);
+    }
 
     try log_mod.Logger.init(alloc);
     defer log_mod.Logger.deinit();

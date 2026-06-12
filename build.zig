@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const app_version = "0.0.3";
+const app_version = "0.0.4";
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
