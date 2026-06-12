@@ -20,10 +20,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    const headers = [_]std.http.Header{
-        .{ .name = "User-Agent", .value = user_agent },
-    };
-
     // 2. Resolve latest release -> download URL.
     std.debug.print("Resolving latest release for {s} ...\n", .{repo});
     var api_aw = std.Io.Writer.Allocating.init(allocator);
@@ -32,7 +28,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const api_res = try client.fetch(.{
         .location = .{ .url = api_url },
         .method = .GET,
-        .extra_headers = &headers,
+        .headers = .{ .user_agent = .{ .override = user_agent } },
         .response_writer = &api_aw.writer,
     });
     if (api_res.status != .ok) {
@@ -60,7 +56,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const dl_res = try client.fetch(.{
         .location = .{ .url = download_url },
         .method = .GET,
-        .extra_headers = &headers,
+        .headers = .{ .user_agent = .{ .override = user_agent } },
         .response_writer = &tgz_aw.writer,
     });
     if (dl_res.status != .ok) {
