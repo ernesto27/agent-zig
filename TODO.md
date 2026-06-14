@@ -10,6 +10,7 @@
 [x] - show image preview for non-PNG formats (jpg, webp, etc.)
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
+[] - add prompt queue
 [] - mouse wheel scroll for attachment preview panel
 [] - add brave for searching
 [] - show preview of sessions

@@ -15,7 +15,7 @@ const mcp_picker_mod = @import("mcp_picker.zig");
 const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
 const attach_preview = @import("attach_preview.zig");
-const update = @import("update.zig");
+const cli = @import("cli/common.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -40,14 +40,7 @@ pub fn main() !void {
 
     if (args.len > 1) {
         const cmd = args[1];
-
-        if (std.mem.eql(u8, cmd, "update")) {
-            update.run(alloc) catch |err| {
-                std.debug.print("update failed: {s}\n", .{@errorName(err)});
-                std.process.exit(1);
-            };
-            return;
-        }
+        if (cli.dispatch(alloc, cmd)) return;
 
         std.debug.print("unknown command: {s}\n", .{cmd});
         std.process.exit(1);
