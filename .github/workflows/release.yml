@@ -16,7 +16,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-      - run: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseFast --prefix dist/linux
+      - run: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseFast -Dtavily-api-key="$TAVILY_API_KEY" --prefix dist/linux
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       - run: tar -czf agent-zig-linux-x86_64.tar.gz -C dist/linux/bin agent-zig
 
       - uses: marvinpinto/action-automatic-releases@latest

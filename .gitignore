@@ -1,4 +1,5 @@
 .env
+run.sh
 data.txt
 .zig-cache
 docs
