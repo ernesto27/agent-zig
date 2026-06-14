@@ -11,6 +11,8 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - add prompt queue
+[] - option to hide think
+[] - on file picker do not show .gitignore files
 [] - mouse wheel scroll for attachment preview panel
 [] - add brave for searching
 [] - show preview of sessions

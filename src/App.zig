@@ -93,6 +93,7 @@ pub const App = struct {
     is_loading: bool = false,
     start_time: ?i64 = null,
     needs_redraw: bool = true,
+    latest_version: ?[]const u8 = null,
     tool_status: ?[]const u8 = null,
     grep_status: GrepStatus = .{},
     glob_status: GlobStatus = .{},
@@ -442,6 +443,7 @@ pub const App = struct {
         self.mcp_registry.shutdownAll();
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
+        if (self.latest_version) |v| self.alloc.free(v);
     }
 
     fn setGrepStatus(self: *Self, pattern: []const u8, path: []const u8, include: []const u8) void {

@@ -3,6 +3,7 @@
 //! extract the binary, install to ~/.local/bin via an atomic rename.
 const std = @import("std");
 const builtin = @import("builtin");
+const build_info = @import("agent").build;
 
 const repo = "ernesto27/agent-zig";
 const binary = "agent-zig";
@@ -17,36 +18,18 @@ pub fn run(allocator: std.mem.Allocator) !void {
         return error.UnsupportedPlatform;
     }
 
-    var client = std.http.Client{ .allocator = allocator };
-    defer client.deinit();
-
     // 2. Resolve latest release -> download URL.
     std.debug.print("Resolving latest release for {s} ...\n", .{repo});
-    var api_aw = std.Io.Writer.Allocating.init(allocator);
-    defer api_aw.deinit();
-
-    const api_res = try client.fetch(.{
-        .location = .{ .url = api_url },
-        .method = .GET,
-        .headers = .{ .user_agent = .{ .override = user_agent } },
-        .response_writer = &api_aw.writer,
-    });
-    if (api_res.status != .ok) {
-        std.debug.print("error: GitHub API returned HTTP {d}\n", .{@intFromEnum(api_res.status)});
-        return error.HttpRequestFailed;
-    }
-
-    const api_body = api_aw.written();
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, api_body, .{
-        .ignore_unknown_fields = true,
-        .allocate = .alloc_always,
-    });
+    const parsed = try fetchLatestRelease(allocator);
     defer parsed.deinit();
 
     const download_url = findAssetUrl(parsed.value) orelse {
         std.debug.print("error: asset '{s}' not found in latest release\n", .{asset});
         return error.AssetNotFound;
     };
+
+    var client = std.http.Client{ .allocator = allocator };
+    defer client.deinit();
 
     // 3. Download the tarball into memory.
     std.debug.print("Downloading {s} from {s} ...\n", .{ binary, download_url });
@@ -97,6 +80,55 @@ pub fn run(allocator: std.mem.Allocator) !void {
         std.debug.print("\n  Add this to your shell profile:\n", .{});
         std.debug.print("    export PATH=\"$HOME/.local/bin:$PATH\"\n", .{});
     }
+}
+
+pub fn checkNewVersion(allocator: std.mem.Allocator) !?[]const u8 {
+    const parsed = try fetchLatestRelease(allocator);
+    defer parsed.deinit();
+    const tag = findTagName(parsed.value) orelse return error.TagNotFound;
+    const latest = std.mem.trimLeft(u8, tag, "v");
+    if (!isNewer(latest, build_info.version)) return null;
+    return try allocator.dupe(u8, latest);
+}
+
+fn isNewer(remote: []const u8, local: []const u8) bool {
+    const r = std.SemanticVersion.parse(remote) catch return !std.mem.eql(u8, remote, local);
+    const l = std.SemanticVersion.parse(local) catch return !std.mem.eql(u8, remote, local);
+    return r.order(l) == .gt;
+}
+
+/// Fetch + parse the latest release JSON. Caller owns the result and must
+/// deinit() it. Strings are copied into the Parsed arena (.alloc_always), so
+/// the response body and client are freed before returning.
+fn fetchLatestRelease(allocator: std.mem.Allocator) !std.json.Parsed(std.json.Value) {
+    var client = std.http.Client{ .allocator = allocator };
+    defer client.deinit();
+
+    var api_aw = std.Io.Writer.Allocating.init(allocator);
+    defer api_aw.deinit();
+
+    const api_res = try client.fetch(.{
+        .location = .{ .url = api_url },
+        .method = .GET,
+        .headers = .{ .user_agent = .{ .override = user_agent } },
+        .response_writer = &api_aw.writer,
+    });
+    if (api_res.status != .ok) {
+        std.debug.print("error: GitHub API returned HTTP {d}\n", .{@intFromEnum(api_res.status)});
+        return error.HttpRequestFailed;
+    }
+
+    return try std.json.parseFromSlice(std.json.Value, allocator, api_aw.written(), .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    });
+}
+
+/// Read the release tag_name (e.g. "v0.0.5") from the parsed JSON root.
+fn findTagName(root: std.json.Value) ?[]const u8 {
+    if (root != .object) return null;
+    const tag = root.object.get("tag_name") orelse return null;
+    return if (tag == .string) tag.string else null;
 }
 
 /// Find assets[].browser_download_url where name == asset.

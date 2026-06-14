@@ -200,7 +200,7 @@ pub fn renderInput(
         var buf_off: usize = 0;
         for (app.pending_attachments.items) |path| {
             const is_image = image_attach.mimeFromPath(path) != null;
-            const remaining = chipBuf[buf_off..];
+            const remaining = chip_buf[buf_off..];
             const chip = if (is_image)
                 std.fmt.bufPrint(remaining, "[Image {d}]", .{image_idx}) catch "[Image]"
             else
@@ -453,8 +453,8 @@ fn applyInputSelectionHighlight(
     }
 }
 
-var loadingBuf: [32]u8 = undefined;
-var chipBuf: [512]u8 = undefined;
+var loading_buf: [32]u8 = undefined;
+var chip_buf: [512]u8 = undefined;
 
 pub fn loading(elapsed_secs: usize) []const u8 {
     const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };
@@ -464,9 +464,9 @@ pub fn loading(elapsed_secs: usize) []const u8 {
     const seconds = elapsed_secs % 60;
 
     const result = if (minutes == 0)
-        std.fmt.bufPrint(&loadingBuf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame
+        std.fmt.bufPrint(&loading_buf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame
     else
-        std.fmt.bufPrint(&loadingBuf, "{s}({d}m {d}s) ", .{ frame, minutes, seconds }) catch return frame;
+        std.fmt.bufPrint(&loading_buf, "{s}({d}m {d}s) ", .{ frame, minutes, seconds }) catch return frame;
     return result;
 }
 
@@ -504,52 +504,73 @@ pub fn renderHeader(win: vaxis.Window, cwd: []const u8) void {
     }, .{ .row_offset = 0, .col_offset = @intCast(title.len) });
 }
 
-pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: agent.config.McpServers, has_agents_md: bool) void {
+var banner_buf: [128]u8 = undefined;
+
+pub fn renderUpdateBanner(win: vaxis.Window, version: []const u8) void {
+    if (win.height == 0) return;
+    const message = std.fmt.bufPrint(&banner_buf, " agent-zig has a new version {s} — run `agent-zig update` to update ", .{version}) catch return;
+    const row: u16 = 0;
+    _ = win.printSegment(.{
+        .text = message,
+        .style = .{
+            .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
+            .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+            .bold = true,
+        },
+    }, .{ .row_offset = row, .col_offset = 1 });
+}
+
+pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: agent.config.McpServers, has_agents_md: bool, top_offset: u16) void {
+    const welcome_win = win.child(.{
+        .y_off = top_offset,
+        .width = win.width,
+        .height = win.height -| top_offset,
+    });
     const header_style = vaxis.Style{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true };
     const item_style = vaxis.Style{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } };
 
     var row: u16 = 1;
 
     // [Context]
-    if (row >= win.height) return;
-    _ = win.printSegment(.{ .text = "[Context]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    if (row >= welcome_win.height) return;
+    _ = welcome_win.printSegment(.{ .text = "[Context]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
-    if (row >= win.height) return;
+    if (row >= welcome_win.height) return;
     if (has_agents_md) {
-        _ = win.printSegment(.{ .text = "  AGENTS.md", .style = item_style }, .{ .row_offset = row, .col_offset = 1 });
+        _ = welcome_win.printSegment(.{ .text = "  AGENTS.md", .style = item_style }, .{ .row_offset = row, .col_offset = 1 });
     }
     row += 1;
 
     // [Skills]
-    if (row >= win.height) return;
-    _ = win.printSegment(.{ .text = "[Skills]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    if (row >= welcome_win.height) return;
+    _ = welcome_win.printSegment(.{ .text = "[Skills]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
-    if (row >= win.height) return;
+    if (row >= welcome_win.height) return;
     var col: u16 = 3;
     for (skills.skills.items, 0..) |skill, idx| {
         if (idx > 0) {
-            const sep = win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = col });
+            const sep = welcome_win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = col });
             col = sep.col;
         }
-        const res = win.printSegment(.{ .text = skill.name, .style = item_style }, .{ .row_offset = row, .col_offset = col });
+        const res = welcome_win.printSegment(.{ .text = skill.name, .style = item_style }, .{ .row_offset = row, .col_offset = col });
         col = res.col;
     }
     row += 1;
 
     // [MCPs]
-    if (row >= win.height) return;
-    _ = win.printSegment(.{ .text = "[MCPs]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
+    if (row >= welcome_win.height) return;
+    _ = welcome_win.printSegment(.{ .text = "[MCPs]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
-    if (row >= win.height) return;
+    if (row >= welcome_win.height) return;
     var mcp_col: u16 = 3;
     var mcp_it = mcps.map.iterator();
     var mcp_idx: usize = 0;
     while (mcp_it.next()) |entry| : (mcp_idx += 1) {
         if (mcp_idx > 0) {
-            const sep = win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
+            const sep = welcome_win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
             mcp_col = sep.col;
         }
-        const res = win.printSegment(.{ .text = entry.key_ptr.*, .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
+        const res = welcome_win.printSegment(.{ .text = entry.key_ptr.*, .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
         mcp_col = res.col;
     }
 }

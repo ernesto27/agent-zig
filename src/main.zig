@@ -16,10 +16,22 @@ const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
 const attach_preview = @import("attach_preview.zig");
 const cli = @import("cli/common.zig");
+const update = @import("cli/update.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 const app_version = agent.build.version;
+
+fn versionCheckThread(app: *App, loop: *EventLoop) void {
+    const v = update.checkNewVersion(app.alloc) catch null;
+    if (v) |ver| {
+        app.mutex.lock();
+        app.latest_version = ver;
+        app.needs_redraw = true;
+        app.mutex.unlock();
+        ui.wakeLoop(loop);
+    }
+}
 
 pub const std_options: std.Options = .{
     .logFn = log_mod.Logger.logToFile,
@@ -152,6 +164,9 @@ pub fn main() !void {
     var bracketed_paste = false;
     var paste_buf = std.ArrayList(u8){};
     defer paste_buf.deinit(alloc);
+
+    const version_thread = try std.Thread.spawn(.{}, versionCheckThread, .{ &app, &loop });
+    version_thread.detach();
 
     while (running) {
         const event = loop.nextEvent();
@@ -358,7 +373,11 @@ pub fn main() !void {
         }
 
         const start = if (app.messages.items.len == 0) blk: {
-            ui.renderWelcome(chat_win, app.skill_registry, config_store.cfg.mcpServers, app.system_prompt.agents_md_exists);
+            const banner_rows: u16 = if (app.latest_version) |v| blk2: {
+                ui.renderUpdateBanner(chat_win, v);
+                break :blk2 1;
+            } else 0;
+            ui.renderWelcome(chat_win, app.skill_registry, config_store.cfg.mcpServers, app.system_prompt.agents_md_exists, banner_rows);
             break :blk 0;
         } else ui.renderChatLines(chat_win, rendered_lines, scroll_offset);
 
