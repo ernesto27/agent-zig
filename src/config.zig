@@ -64,12 +64,14 @@ pub const HttpHeaders = std.json.ArrayHashMap([]const u8);
 /// (`command` + `args`) or http (`type` = "http" + `url`); the unused fields
 /// stay at their empty defaults.
 pub const McpServerConfig = struct {
-    @"type": []const u8 = "",
+    type: []const u8 = "",
     command: []const u8 = "",
     args: []const []const u8 = &.{},
     url: []const u8 = "",
     headers: HttpHeaders = .{},
 };
+
+pub const Settings = struct { showThinkingBlock: bool = true };
 
 /// The whole `mcpServers` block: a name-keyed map of server configs, matching
 /// the JSON object `{ "<name>": { ... } }`. Iterate via `.map`.
@@ -80,6 +82,7 @@ pub const Config = struct {
     providers: Providers = .{},
     sessions: []const SessionEntry = &.{},
     mcpServers: McpServers = .{},
+    settings: Settings = .{},
     dockerImage: []const u8 = "ubuntu:24.04",
 };
 
@@ -143,7 +146,21 @@ pub const ConfigStore = struct {
         log.info("saved config to {s}", .{path});
     }
 
-    pub fn save(self: *ConfigStore) !void {
+    /// Set any cfg field to `value` and persist. Dispatch is on the *field*
+    /// type: only `[]const u8` fields are duped into the arena (so a borrowed
+    /// slice outlives the call); every other field type is assigned by value.
+    /// For a `[]const u8` field the `value` may be any slice that coerces to it
+    /// (`[]u8`, `[:0]const u8`, a literal) — `dupe` handles the coercion.
+    /// `field` is a pointer to the target field, e.g.:
+    ///   try store.set(&store.cfg.dockerImage, "node:20");            // duped
+    ///   try store.set(&store.cfg.settings.showThinkingBlock, true);  // by value
+    pub fn set(self: *ConfigStore, field: anytype, value: anytype) !void {
+        const Field = @typeInfo(@TypeOf(field)).pointer.child;
+        if (Field == []const u8) {
+            field.* = try self.arena.allocator().dupe(u8, value);
+        } else {
+            field.* = value;
+        }
         try self.write(self.cfg);
     }
 
@@ -198,17 +215,6 @@ pub const ConfigStore = struct {
         tmp.sessions = sessions;
         try self.write(tmp);
         self.cfg.sessions = sessions;
-    }
-
-    pub fn updateThinkEffort(self: *ConfigStore, provider_name: []const u8, effort: Effort) !void {
-        var tmp = self.cfg;
-        const provider = tmp.providers.forProvider(provider_name) orelse return error.ProviderNotFound;
-
-        const effort_copy = try self.arena.allocator().dupe(u8, effort.apiValue());
-
-        provider.thinkEffort = effort_copy;
-        try self.write(tmp);
-        self.cfg.providers = tmp.providers;
     }
 
     /// The persisted thinking effort for a provider, parsed back from its

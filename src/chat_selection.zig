@@ -240,31 +240,33 @@ pub fn buildRenderedLines(
                 } },
             });
 
-            if (msg.thinking) |th| {
-                // "Thinking:" header
-                try lines.append(allocator, .{
-                    .text = "Thinking:",
-                    .display_cols = displayWidth("Thinking:", width_method),
-                    .entry = .{ .thinking = .{ .text = "Thinking:", .is_header = true } },
-                });
-                // Wrapped thinking content
-                const wrap_w = if (chat_width > 4) chat_width - 4 else 10;
-                const wrapped = wrapText(th, wrap_w, 512);
-                for (wrapped) |maybe_line| {
-                    const line = maybe_line orelse break;
-                    const rendered = try allocator.dupe(u8, line);
+            if (app.config_store.cfg.settings.showThinkingBlock) {
+                if (msg.thinking) |th| {
+                    // "Thinking:" header
                     try lines.append(allocator, .{
-                        .text = rendered,
-                        .display_cols = displayWidth(rendered, width_method),
-                        .entry = .{ .thinking = .{ .text = line, .is_header = false } },
+                        .text = "Thinking:",
+                        .display_cols = displayWidth("Thinking:", width_method),
+                        .entry = .{ .thinking = .{ .text = "Thinking:", .is_header = true } },
+                    });
+                    // Wrapped thinking content
+                    const wrap_w = if (chat_width > 4) chat_width - 4 else 10;
+                    const wrapped = wrapText(th, wrap_w, 512);
+                    for (wrapped) |maybe_line| {
+                        const line = maybe_line orelse break;
+                        const rendered = try allocator.dupe(u8, line);
+                        try lines.append(allocator, .{
+                            .text = rendered,
+                            .display_cols = displayWidth(rendered, width_method),
+                            .entry = .{ .thinking = .{ .text = line, .is_header = false } },
+                        });
+                    }
+                    // Blank separator before response
+                    try lines.append(allocator, .{
+                        .text = "",
+                        .display_cols = 0,
+                        .entry = .{ .thinking = .{ .text = "", .is_header = false } },
                     });
                 }
-                // Blank separator before response
-                try lines.append(allocator, .{
-                    .text = "",
-                    .display_cols = 0,
-                    .entry = .{ .thinking = .{ .text = "", .is_header = false } },
-                });
             }
 
             const styled = app.getStyledLines(msg) catch &.{};

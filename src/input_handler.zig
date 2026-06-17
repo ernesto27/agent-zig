@@ -47,9 +47,10 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         const model = model_picker_mod.findModel(ctx.app.llm_client.config.model);
         if (model != null and model.?.model.supports_thinking) {
             const effort = ctx.app.llm_client.config.effort.next();
-            ctx.config.updateThinkEffort(ctx.app.llm_client.config.provider_name, effort) catch |err| {
-                log.err("failed to persist thinking effort: {}", .{err});
-            };
+            if (ctx.config.cfg.providers.forProvider(ctx.app.llm_client.config.provider_name)) |pc|
+                ctx.config.set(&pc.thinkEffort, effort.apiValue()) catch |err| {
+                    log.err("failed to persist thinking effort: {}", .{err});
+                };
             ctx.app.llm_client.config.effort = ctx.app.llm_client.config.effort.next();
         }
     } else if (key.matches('a', .{ .ctrl = true })) {
@@ -467,17 +468,20 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.model_picker.active and ctx.model_picker.results.items.len > 0) {
         const selected = ctx.model_picker.results.items[ctx.model_picker.selected];
         ctx.app.llm_client.config.model = selected.id;
-        ctx.config.cfg.providers.selected = selected.id;
+        ctx.config.set(&ctx.config.cfg.providers.selected, selected.id) catch |err| {
+            log.err("failed to persist selected provider: {}", .{err});
+        };
         if (agent.llm.providers.findModel(selected.id)) |found| {
             ctx.app.llm_client.config.provider_name = found.provider.name;
             if (ctx.config.cfg.providers.forProvider(found.provider.name)) |pc| {
                 ctx.app.llm_client.config.base_url = pc.baseUrl;
                 ctx.app.llm_client.config.api_key = pc.apiKey;
                 ctx.app.llm_client.config.effort = ctx.config.thinkEffort(found.provider.name);
-                pc.model = selected.id;
+                ctx.config.set(&pc.model, selected.id) catch |err| {
+                    log.err("failed to persist model: {}", .{err});
+                };
             }
         }
-        ctx.config.save() catch {};
         ctx.model_picker.reset();
     } else if (ctx.mcp_picker.active) {
         ctx.mcp_picker.enter();
@@ -489,8 +493,11 @@ fn handleEnter(ctx: *InputContext) !bool {
             const provider_name = ctx.provider_picker.selectedProvider().name;
             ctx.app.llm_client.config.api_key = new_key;
             ctx.app.llm_client.config.provider_name = provider_name;
-            if (ctx.config.cfg.providers.forProvider(provider_name)) |pc| pc.apiKey = new_key;
-            ctx.config.save() catch {};
+            if (ctx.config.cfg.providers.forProvider(provider_name)) |pc| {
+                ctx.config.set(&pc.apiKey, new_key) catch |err| {
+                    log.err("failed to persist api key: {}", .{err});
+                };
+            }
         }
         ctx.provider_picker.reset();
     } else if (ctx.app.sessions.active and ctx.app.sessions.entries.items.len > 0) {
