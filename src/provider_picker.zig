@@ -51,12 +51,11 @@ pub const ProviderPicker = struct {
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
-        const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
         var fr: u16 = 0;
         while (fr < modal_h) : (fr += 1) {
             var fc: u16 = 0;
             while (fc < modal_w) : (fc += 1) {
-                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
+                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 } });
             }
         }
 
@@ -71,18 +70,11 @@ pub const ProviderPicker = struct {
                     .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
                 }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
 
+                const bg: vaxis.Color = .default;
                 for (model_picker.providers, 0..) |p, idx| {
                     const prow: u16 = @intCast(idx + 2);
                     const is_sel = idx == self.selected;
-                    const bg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xC0, 0x70, 0x20 } } else .{ .index = 0 };
-                    const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
-
-                    if (is_sel) {
-                        var c: u16 = 1;
-                        while (c < modal_w -| 1) : (c += 1) {
-                            modal.writeCell(c, prow, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
-                        }
-                    }
+                    const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
 
                     _ = modal.printSegment(.{
                         .text = p.name,

@@ -398,12 +398,11 @@ pub const Sessions = struct {
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
-        const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
         var fr: u16 = 0;
         while (fr < modal_h) : (fr += 1) {
             var fc: u16 = 0;
             while (fc < modal_w) : (fc += 1) {
-                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
+                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 } });
             }
         }
 

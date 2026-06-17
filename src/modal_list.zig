@@ -24,12 +24,10 @@ pub const Options = struct {
     max_height: u16 = 20,
 };
 
-const modal_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
-const sel_bg: vaxis.Color = .{ .rgb = .{ 0xC0, 0x70, 0x20 } };
 const fg_default: vaxis.Color = .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
-const fg_selected: vaxis.Color = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } };
+const fg_selected: vaxis.Color = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } };
 const fg_muted: vaxis.Color = .{ .rgb = .{ 0x88, 0x88, 0x88 } };
-const fg_muted_on_sel: vaxis.Color = .{ .rgb = .{ 0x2A, 0x15, 0x00 } };
+const fg_muted_on_sel: vaxis.Color = .{ .rgb = .{ 0x5A, 0x9E, 0xA8 } };
 const fg_placeholder: vaxis.Color = .{ .rgb = .{ 0x66, 0x66, 0x66 } };
 
 pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) void {
@@ -54,19 +52,19 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
     while (fr < modal_h) : (fr += 1) {
         var fc: u16 = 0;
         while (fc < modal_w) : (fc += 1) {
-            modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = modal_bg } });
+            modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 } });
         }
     }
 
     _ = modal.printSegment(.{
         .text = opts.title,
-        .style = .{ .fg = fg_selected, .bold = true, .bg = modal_bg },
+        .style = .{ .fg = fg_selected, .bold = true },
     }, .{ .row_offset = 0, .col_offset = 1 });
     const hint_len: u16 = @intCast(opts.esc_hint.len);
     if (modal_w > hint_len + 3) {
         _ = modal.printSegment(.{
             .text = opts.esc_hint,
-            .style = .{ .fg = fg_muted, .bg = modal_bg },
+            .style = .{ .fg = fg_muted },
         }, .{ .row_offset = 0, .col_offset = modal_w - hint_len - 2 });
     }
 
@@ -74,16 +72,16 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
     if (opts.query) |q| {
         const text = if (q.len > 0) q else opts.query_placeholder;
         const style: vaxis.Style = if (q.len > 0)
-            .{ .fg = fg_selected, .bg = modal_bg }
+            .{ .fg = fg_selected }
         else
-            .{ .fg = fg_placeholder, .bg = modal_bg };
+            .{ .fg = fg_placeholder };
         _ = modal.printSegment(.{ .text = text, .style = style }, .{ .row_offset = 1, .col_offset = 2 });
     }
 
     if (opts.items.len == 0) {
         _ = modal.printSegment(.{
             .text = opts.empty_message,
-            .style = .{ .fg = fg_muted, .bg = modal_bg },
+            .style = .{ .fg = fg_muted },
         }, .{ .row_offset = items_row, .col_offset = 2 });
         return;
     }
@@ -100,21 +98,14 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         primary_max + 4,
     ));
 
+    const bg: vaxis.Color = .default;
     for (opts.items, 0..) |it, idx| {
         const row: u16 = items_row + @as(u16, @intCast(idx));
         if (row >= last_row) break;
 
         const is_sel = idx == opts.selected;
-        const bg = if (is_sel) sel_bg else modal_bg;
         const fg = if (is_sel) fg_selected else fg_default;
         const fg_secondary = if (is_sel) fg_muted_on_sel else fg_muted;
-
-        if (is_sel) {
-            var c: u16 = 1;
-            while (c < inner_w + 1) : (c += 1) {
-                modal.writeCell(c, row, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = .{ .bg = bg } });
-            }
-        }
 
         const cursor: []const u8 = if (is_sel) "❯ " else "  ";
         _ = modal.printSegment(.{
