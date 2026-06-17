@@ -108,6 +108,7 @@ pub const CommandPicker = struct {
 
     pub fn render(self: *const CommandPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
         const n: u16 = @intCast(@min(self.results.items.len, MAX_RESULTS));
+        const start: usize = if (self.selected < n) 0 else self.selected - n + 1;
         const picker_h: u16 = n + 2;
         const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;
         const picker = win.child(.{
@@ -130,13 +131,15 @@ pub const CommandPicker = struct {
         }
 
         const prefix_width: u16 = 4;
-        const name_width = self.maxNameWidth(n);
+        const name_width = self.maxNameWidth(start, n);
         const desc_col = prefix_width + name_width + 2;
         const max_desc_width: usize = picker.width -| desc_col -| 1;
 
-        for (self.results.items, 0..) |command, idx| {
-            const row: u16 = @intCast(idx);
-            if (row >= n) break;
+        var row: u16 = 0;
+        while (row < n) : (row += 1) {
+            const idx = start + row;
+            if (idx >= self.results.items.len) break;
+            const command = self.results.items[idx];
 
             const is_selected = idx == self.selected;
             const bg: vaxis.Color = if (is_selected)
@@ -162,11 +165,13 @@ pub const CommandPicker = struct {
         }
     }
 
-    fn maxNameWidth(self: *const CommandPicker, visible_count: u16) u16 {
+    fn maxNameWidth(self: *const CommandPicker, start: usize, visible_count: u16) u16 {
         var width: u16 = 0;
-        for (self.results.items, 0..) |command, idx| {
-            if (idx >= visible_count) break;
-            width = @max(width, @as(u16, @intCast(command.name.len + 1)));
+        var row: u16 = 0;
+        while (row < visible_count) : (row += 1) {
+            const idx = start + row;
+            if (idx >= self.results.items.len) break;
+            width = @max(width, @as(u16, @intCast(self.results.items[idx].name.len + 1)));
         }
         return width;
     }

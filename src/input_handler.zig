@@ -64,6 +64,11 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         if (countCtrlPlusC == 2) {
             return true;
         }
+    } else if (key.matches(vaxis.Key.tab, .{})) {
+        if (ctx.command_picker.active) {
+            if (ctx.command_picker.selectedCommand()) |cmd|
+                try fillInputWithCommand(ctx, cmd.name);
+        }
     } else if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
         const modal_open =
             ctx.app.tool_confirmation.pending or
@@ -153,6 +158,14 @@ pub fn handlePasteEnd(ctx: *InputContext, text: []const u8) !void {
 fn clearInput(ctx: *InputContext) void {
     ctx.input.clearRetainingCapacity();
     ctx.cursor_pos = 0;
+}
+
+fn fillInputWithCommand(ctx: *InputContext, name: []const u8) !void {
+    ctx.input.clearRetainingCapacity();
+    try ctx.input.append(ctx.alloc, '/');
+    try ctx.input.appendSlice(ctx.alloc, name);
+    ctx.cursor_pos = ctx.input.items.len;
+    try ctx.command_picker.updateFromInput(ctx.alloc, ctx.input.items);
 }
 
 fn resetExitState(ctx: *InputContext) void {

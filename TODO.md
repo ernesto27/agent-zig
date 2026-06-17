@@ -11,6 +11,8 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - add prompt queue
+[x] - add option to press tab an autocmplete command
+[] - show trust message before start
 [] - option to hide think
 [] - on file picker do not show .gitignore files
 [] - mouse wheel scroll for attachment preview panel
