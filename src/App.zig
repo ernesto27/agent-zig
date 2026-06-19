@@ -75,6 +75,7 @@ pub const App = struct {
     alloc: std.mem.Allocator,
     messages: std.ArrayList(Message),
     llm_history: std.ArrayList(agent.llm.Message),
+    message_queue: agent.message_queue.MessageQueue = .{},
     llm_client: *agent.llm.Client,
     // Borrowed; owned by main(). Live handle to persisted config + settings,
     // so reads (e.g. dockerImage, settings) reflect runtime mutations.
@@ -431,6 +432,7 @@ pub const App = struct {
         self.freeMessages();
         self.messages.deinit(self.alloc);
         self.llm_history.deinit(self.alloc);
+        self.message_queue.deinit(self.alloc);
         self.clearPendingAttachments();
         self.grep_status.deinit(self.alloc);
         self.glob_status.deinit(self.alloc);
@@ -598,6 +600,8 @@ pub const App = struct {
         }
 
         self.cancel_requested = true;
+        // Drop any queued follow-up messages — cancelling abandons the turn.
+        self.message_queue.clear(self.alloc);
         self.needs_redraw = true;
         self.mutex.unlock();
         wakeLoop(loop);
@@ -846,7 +850,7 @@ pub const App = struct {
             // Check stop reason
             const is_tool_use = if (response.stop_reason) |sr| std.mem.eql(u8, sr, "tool_use") else false;
             if (!is_tool_use or tool_uses.items.len == 0) {
-                // No tools — append assistant text to history and done
+                // No tools — append assistant text to history and donex
                 if (text_buf.items.len > 0) {
                     const duped = alloc.dupe(u8, text_buf.items) catch break;
                     self.mutex.lock();
@@ -855,6 +859,30 @@ pub const App = struct {
                         .content = .{ .text = duped },
                     });
                     self.mutex.unlock();
+                }
+
+                // If the user queued a message while loading, send it as the
+                // next user turn instead of finishing the loop.
+                if (self.message_queue.dequeue()) |queued| {
+                    self.mutex.lock();
+                    const ui_user = alloc.dupe(u8, queued) catch {
+                        alloc.free(queued);
+                        self.mutex.unlock();
+                        break;
+                    };
+                    // 0-byte dupe can't fail; needs to be heap so freeMessages frees it.
+                    const placeholder = alloc.dupe(u8, "") catch unreachable;
+                    // UI: show the queued user message + an empty assistant
+                    // bubble for the next streamed response.
+                    self.messages.append(alloc, .{ .role = .user, .content = ui_user }) catch |err|
+                        log.err("queue: append user message failed: {}", .{err});
+                    self.messages.append(alloc, .{ .role = .assistant, .content = placeholder }) catch |err|
+                        log.err("queue: append assistant placeholder failed: {}", .{err});
+                    // llm_history takes ownership of the dequeued slice.
+                    self.pushHistory(alloc, .{ .role = .user, .content = .{ .text = queued } });
+                    self.mutex.unlock();
+                    log.info("[assistant] sending queued follow-up: {s}", .{queued});
+                    continue;
                 }
                 break;
             }

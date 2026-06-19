@@ -430,6 +430,9 @@ pub fn main() !void {
             app.sessions.renderRename(win, vx.screen.width, vx.screen.height);
         }
 
+        if (app.is_loading) ui.renderShowLoading(win, &app, layout.loading_y);
+        if (!app.tool_confirmation.pending) app.message_queue.render(win, layout.queue_y, layout.queue_h);
+
         const input_win = win.child(.{
             .x_off = 0,
             .y_off = layout.input_y,

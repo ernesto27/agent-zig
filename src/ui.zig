@@ -154,9 +154,7 @@ pub fn buildInputLayout(
     screen_width: u16,
     cursor_pos: usize,
 ) InputLayout {
-    const prompt = if (app.is_loading)
-        loading(app.getElapsedSeconds() orelse 0)
-    else switch (app.mode) {
+    const prompt = switch (app.mode) {
         .shell => "! ",
         else => "> ",
     };
@@ -468,6 +466,13 @@ pub fn loading(elapsed_secs: usize) []const u8 {
     else
         std.fmt.bufPrint(&loading_buf, "{s}({d}m {d}s) ", .{ frame, minutes, seconds }) catch return frame;
     return result;
+}
+
+pub fn renderShowLoading(win: vaxis.Window, app: *App, loading_y: u16) void {
+    _ = win.printSegment(.{
+        .text = loading(app.getElapsedSeconds() orelse 0),
+        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+    }, .{ .row_offset = loading_y, .col_offset = 1 });
 }
 
 pub fn wakeLoop(loop: *EventLoop) void {

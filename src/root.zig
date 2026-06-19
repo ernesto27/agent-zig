@@ -11,6 +11,7 @@ pub const sandbox = @import("sandbox.zig");
 pub const system_prompt = @import("system_prompt.zig");
 pub const skills = @import("skills.zig");
 pub const utils = @import("utils.zig");
+pub const message_queue = @import("message_queue.zig");
 pub const mcp = struct {
     pub const protocol = @import("mcp/protocol.zig");
     pub const client = @import("mcp/client.zig");

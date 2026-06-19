@@ -506,16 +506,25 @@ fn handleEnter(ctx: *InputContext) !bool {
         ctx.app.resumeSession(alloc, selected.filename);
         ctx.app.mutex.unlock();
         ctx.app.sessions.reset();
-    } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0) and !ctx.app.is_loading) {
+    } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0)) {
+        const raw_input = ctx.input.items;
+
+        if (ctx.app.is_loading) {
+            try ctx.app.message_queue.enqueue(alloc, raw_input);
+            ctx.draft.clearRetainingCapacity();
+            clearInput(ctx);
+            return false;
+        }
+
         switch (ctx.app.mode) {
             .shell => |shell| {
-                const raw_input = ctx.input.items;
+                const user_input = try alloc.dupe(u8, raw_input);
+                errdefer alloc.free(user_input);
+
                 const shell_result = try shell.runCommand(alloc, raw_input);
                 errdefer alloc.free(shell_result.command);
                 var assistant_content = shell_result.result.content;
                 errdefer alloc.free(assistant_content);
-                const user_input = try alloc.dupe(u8, raw_input);
-                errdefer alloc.free(user_input);
 
                 ctx.app.mutex.lock();
                 errdefer ctx.app.mutex.unlock();

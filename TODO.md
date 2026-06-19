@@ -11,6 +11,7 @@
 [x] - render attached text files preview in panel
 [] - send message with only attachments (empty input + attached files)
 [] - add prompt queue
+[] - when ask appears ,  stop count seconds
 [x] - add option to press tab an autocmplete command
 [] - show trust message before start
 [] - option to hide think
