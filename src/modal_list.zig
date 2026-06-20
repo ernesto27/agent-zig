@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const agent = @import("agent");
 
 pub const Badge = struct {
     text: []const u8,
@@ -121,7 +122,7 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         if (it.secondary) |sec| {
             if (sec.len > 0 and secondary_col < inner_w -| 1) {
                 const max_sec_w: usize = @as(usize, inner_w) -| secondary_col -| 1;
-                const text = truncate(sec, max_sec_w);
+                const text = agent.utils.truncate(sec, max_sec_w, 1);
                 _ = modal.printSegment(.{
                     .text = text,
                     .style = .{ .fg = fg_secondary, .bg = bg },
@@ -139,16 +140,4 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
             }
         }
     }
-}
-
-fn truncate(text: []const u8, max_w: usize) []const u8 {
-    if (text.len <= max_w) return text;
-    if (max_w <= 1) return text[0..0];
-    var end = max_w - 1;
-    while (end > 0 and isUtf8Continuation(text[end])) end -= 1;
-    return text[0..end];
-}
-
-fn isUtf8Continuation(b: u8) bool {
-    return (b & 0b1100_0000) == 0b1000_0000;
 }

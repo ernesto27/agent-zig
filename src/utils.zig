@@ -1,5 +1,20 @@
 const std = @import("std");
 
+/// Truncate `text` to at most `max_w` characters, reserving `reserve` chars
+/// at the end (typically for an ellipsis). UTF-8 safe: never cuts mid-codepoint.
+pub fn truncate(text: []const u8, max_w: usize, reserve: usize) []const u8 {
+    if (text.len <= max_w) return text;
+    const limit = max_w -| reserve;
+    if (limit == 0) return text[0..0];
+    var end = limit;
+    while (end > 0 and isUtf8Continuation(text[end])) end -= 1;
+    return text[0..end];
+}
+
+fn isUtf8Continuation(b: u8) bool {
+    return (b & 0b1100_0000) == 0b1000_0000;
+}
+
 pub fn getCwdPretty(buf: []u8) ![]u8 {
     var raw: [std.fs.max_path_bytes]u8 = undefined;
     const cwd = try std.process.getCwd(&raw);

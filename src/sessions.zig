@@ -1,8 +1,9 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const modal_list = @import("modal_list.zig");
-const config = @import("agent").config;
-const llm = @import("agent").llm;
+const agent = @import("agent");
+const config = agent.config;
+const llm = agent.llm;
 
 const log = std.log.scoped(.sessions);
 
@@ -181,7 +182,7 @@ pub const Sessions = struct {
         var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
         defer dir.close();
 
-        const FileInfo = struct { name: []const u8, display: ?[]const u8, mtime: i128 };
+        const FileInfo = struct { name: []const u8, display: []const u8, mtime: i128 };
         var file_list = std.ArrayListUnmanaged(FileInfo){};
         defer {
             for (file_list.items) |f| allocator.free(f.name);
@@ -210,10 +211,7 @@ pub const Sessions = struct {
         for (file_list.items) |f| {
             const filename = try allocator.dupe(u8, f.name);
             const date = try relativeTime(allocator, f.mtime);
-            const preview = if (f.display) |d|
-                try allocator.dupe(u8, d)
-            else
-                readFirstLine(allocator, dir, f.name) catch try allocator.dupe(u8, f.name);
+            const preview = try allocator.dupe(u8, f.display);
             try self.entries.append(allocator, .{ .filename = filename, .preview = preview, .date = date });
         }
     }
@@ -293,29 +291,6 @@ pub const Sessions = struct {
         return null;
     }
 
-    fn readFirstLine(allocator: std.mem.Allocator, dir: std.fs.Dir, name: []const u8) ![]const u8 {
-        var file = try dir.openFile(name, .{});
-        defer file.close();
-        const bytes = try file.readToEndAlloc(allocator, 64 * 1024);
-        defer allocator.free(bytes);
-
-        var it = std.mem.splitScalar(u8, bytes, '\n');
-        while (it.next()) |line| {
-            if (line.len == 0) continue;
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
-            defer parsed.deinit();
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-            const t = obj.get("type") orelse continue;
-            if (t != .string or !std.mem.eql(u8, t.string, "message")) continue;
-            const content = obj.get("content") orelse continue;
-            const text = extractText(content);
-            if (text.len == 0) continue;
-            return allocator.dupe(u8, text);
-        }
-        return error.Empty;
-    }
-
     fn generateFilename(allocator: std.mem.Allocator) ![]const u8 {
         const epoch = std.time.epoch;
         const ts: u64 = @intCast(std.time.timestamp());
@@ -371,7 +346,8 @@ pub const Sessions = struct {
         var items_buf: [max_visible]modal_list.Item = undefined;
         for (0..count) |i| {
             const entry = self.entries.items[self.scroll + i];
-            items_buf[i] = .{ .primary = entry.preview, .secondary = entry.date };
+            const max_primary: usize = 45;
+            items_buf[i] = .{ .primary = agent.utils.truncate(entry.preview, max_primary, 3), .secondary = entry.date };
         }
 
         modal_list.render(win, screen_w, screen_h, .{

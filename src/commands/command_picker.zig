@@ -150,7 +150,7 @@ pub const CommandPicker = struct {
             _ = picker.printSegment(.{ .text = command.name, .style = style }, .{ .row_offset = row, .col_offset = res.col });
             if (max_desc_width == 0 or command.description.len == 0) continue;
             _ = picker.printSegment(.{
-                .text = truncateDescription(command.description, max_desc_width),
+                .text = agent.utils.truncate(command.description, max_desc_width, 3),
                 .style = if (is_selected)
                     .{ .fg = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } }
                 else
@@ -168,19 +168,5 @@ pub const CommandPicker = struct {
             width = @max(width, @as(u16, @intCast(self.results.items[idx].name.len + 1)));
         }
         return width;
-    }
-
-    fn truncateDescription(text: []const u8, max_width: usize) []const u8 {
-        if (text.len <= max_width) return text;
-
-        var end = if (max_width <= 3) max_width else max_width - 3;
-        while (end > 0 and isUtf8ContinuationByte(text[end])) {
-            end -= 1;
-        }
-        return text[0..end];
-    }
-
-    fn isUtf8ContinuationByte(byte: u8) bool {
-        return (byte & 0b1100_0000) == 0b1000_0000;
     }
 };
