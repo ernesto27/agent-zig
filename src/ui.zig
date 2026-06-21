@@ -470,7 +470,7 @@ pub fn loading(elapsed_secs: usize) []const u8 {
 
 pub fn renderShowLoading(win: vaxis.Window, app: *App, loading_y: u16) void {
     _ = win.printSegment(.{
-        .text = loading(app.getElapsedSeconds() orelse 0),
+        .text = loading(app.loading.elapsed() orelse 0),
         .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
     }, .{ .row_offset = loading_y, .col_offset = 1 });
 }
@@ -487,12 +487,13 @@ pub fn wakeLoop(loop: *EventLoop) void {
 pub fn spinnerThread(app: *App, loop: *EventLoop, spinner_state: *SpinnerState, generation: u64) void {
     while (spinner_state.generation.load(.acquire) == generation) {
         app.mutex.lock();
-        const still_loading = app.is_loading;
-        if (still_loading) app.needs_redraw = true;
+        const still_active = app.loading.active;
+        const animating = app.loading.isActive();
+        if (animating) app.needs_redraw = true;
         app.mutex.unlock();
 
-        if (!still_loading) break;
-        wakeLoop(loop);
+        if (!still_active) break;
+        if (animating) wakeLoop(loop);
         std.Thread.sleep(120 * std.time.ns_per_ms);
     }
 }
@@ -891,7 +892,7 @@ pub fn renderStatus(
         }, .{ .row_offset = status_row, .col_offset = res.col });
     } else {
         res = win.printSegment(.{
-            .text = if (app.is_loading) " THINKING " else " READY ",
+            .text = if (app.loading.active) " THINKING " else " READY ",
             .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }

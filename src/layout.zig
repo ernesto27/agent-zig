@@ -26,7 +26,7 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: boo
         (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "glob"));
     const show_web_panel = app.web_status.label.len > 0;
 
-    const loading_h: u16 = if (app.is_loading) 1 else 0;
+    const loading_h: u16 = if (app.loading.active) 1 else 0;
 
     // Reserve rows for the queued-message ("Steering:") list — hidden while a
     // tool confirmation is pending so it doesn't fight the confirmation panel.
@@ -51,11 +51,10 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: boo
             1;
         const needed: u16 = @intCast(@min(content_lines + 6, 20));
         break :blk @max(needed, 8);
-    } else if (show_grep_panel or show_glob_panel) 8
-      else if (show_web_panel) 3
-      else if (app.pending_attachments.items.len > 0)
-          attach_preview.requestedHeight(app.pending_attachments.items, show_images)
-      else 0;
+    } else if (show_grep_panel or show_glob_panel) 8 else if (show_web_panel) 3 else if (app.pending_attachments.items.len > 0)
+        attach_preview.requestedHeight(app.pending_attachments.items, show_images)
+    else
+        0;
 
     const preview_h: u16 = @min(requested_preview_h, max_preview_h);
 

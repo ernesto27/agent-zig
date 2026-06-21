@@ -7,6 +7,7 @@ const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
 const mode_mod = @import("mode.zig");
 const image_attach = @import("image_attach.zig");
+const LoadingState = @import("loading_state.zig").LoadingState;
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -94,8 +95,7 @@ pub const App = struct {
     init_cmd: init_mod.Init = .{},
     compact_mod: compact_mod.Compact = .{},
     mutex: std.Thread.Mutex = .{},
-    is_loading: bool = false,
-    start_time: ?i64 = null,
+    loading: LoadingState = .{},
     needs_redraw: bool = true,
     latest_version: ?[]const u8 = null,
     tool_status: ?[]const u8 = null,
@@ -174,17 +174,6 @@ pub const App = struct {
         self.mutex.lock();
         self.needs_redraw = true;
         self.mutex.unlock();
-    }
-
-    pub fn getElapsedSeconds(self: *Self) ?usize {
-        const start = self.start_time orelse return null;
-        const now = std.time.timestamp();
-        return @intCast(@max(0, now - start));
-    }
-
-    pub fn setLoading(self: *Self, loading: bool) void {
-        self.is_loading = loading;
-        self.start_time = if (loading) std.time.timestamp() else null;
     }
 
     fn freeMessages(self: *Self) void {
@@ -594,7 +583,7 @@ pub const App = struct {
     pub fn cancelActiveRequest(self: *Self, loop: *EventLoop) bool {
         self.mutex.lock();
 
-        if (!self.is_loading) {
+        if (!self.loading.active) {
             self.mutex.unlock();
             return false;
         }
@@ -615,6 +604,10 @@ pub const App = struct {
         if (!self.tool_confirmation.pending) return;
 
         self.tool_confirmation.cursor = action;
+
+        if (action != .deny) {
+            self.loading.unpause();
+        }
 
         if (action == .deny) {
             var deny_buf: [256]u8 = undefined;
@@ -669,7 +662,7 @@ pub const App = struct {
 
             text_buf.appendSlice(alloc, last_user_msg) catch {
                 text_buf.deinit(alloc);
-                self.setLoading(false);
+                self.loading.stop();
                 self.mutex.unlock();
                 return;
             };
@@ -707,7 +700,7 @@ pub const App = struct {
             const text = text_buf.toOwnedSlice(alloc) catch {
                 text_buf.deinit(alloc);
                 image_blocks.deinit(alloc);
-                self.setLoading(false);
+                self.loading.stop();
                 self.mutex.unlock();
                 return;
             };
@@ -720,7 +713,7 @@ pub const App = struct {
             const blocks = alloc.alloc(agent.llm.message.ContentBlock, 1 + image_blocks.items.len) catch {
                 alloc.free(text);
                 image_blocks.deinit(alloc);
-                self.setLoading(false);
+                self.loading.stop();
                 self.mutex.unlock();
                 return;
             };
@@ -786,7 +779,7 @@ pub const App = struct {
                 log.err("sendMessageStreaming failed: {}", .{err});
                 self.mutex.lock();
                 if (err == error.RequestCancelled) {
-                    self.setLoading(false);
+                    self.loading.stop();
                     self.tool_status = null;
                     self.clearGrepStatus();
                     self.clearGlobStatus();
@@ -973,6 +966,7 @@ pub const App = struct {
                         const new_s = if (is_mcp) "" else (agent.tools.getStringField(tool_use.input, "new_string") orelse "");
 
                         self.mutex.lock();
+                        self.loading.pause();
                         self.tool_confirmation.pending = true;
                         self.tool_confirmation.tool_name = tool_use.name;
                         self.tool_confirmation.file_path = fp;
@@ -1094,7 +1088,7 @@ pub const App = struct {
 
         // Done
         self.mutex.lock();
-        self.setLoading(false);
+        self.loading.stop();
         self.tool_status = null;
         self.clearGrepStatus();
         self.clearGlobStatus();

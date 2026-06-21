@@ -190,7 +190,7 @@ fn spawnLlmRequest(ctx: *InputContext) !void {
 
     ctx.app.mutex.lock();
     try ctx.app.messages.append(ctx.alloc, .{ .role = .assistant, .content = try ctx.alloc.dupe(u8, "") });
-    ctx.app.setLoading(true);
+    ctx.app.loading.start();
     ctx.app.mutex.unlock();
     ctx.auto_scroll.* = true;
     const generation = ctx.spinner_state.generation.fetchAdd(1, .acq_rel) + 1;
@@ -209,25 +209,25 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
         .model => try ctx.model_picker.open(ctx.alloc),
         .clear => ctx.app.clearHistory(),
         .compact => {
-            if (ctx.app.is_loading) return .none;
+            if (ctx.app.loading.active) return .none;
             try ctx.app.compactCMD();
             return .send;
         },
         .fork => {
-            if (ctx.app.is_loading) return .none;
+            if (ctx.app.loading.active) return .none;
             try ctx.app.forkCMD();
             return .send;
         },
         .resume_session => ctx.app.sessions.open(),
         .init => {
-            if (ctx.app.is_loading) return .none;
+            if (ctx.app.loading.active) return .none;
             try ctx.app.initCMD();
             return .send;
         },
         .rename => ctx.app.sessions.openRename(),
         .mcp => try ctx.mcp_picker.open(ctx.alloc, &ctx.app.mcp_registry, ctx.app.mcp_config),
         .sandbox => {
-            if (ctx.app.is_loading) return .none;
+            if (ctx.app.loading.active) return .none;
             ctx.app.toggleSandbox(ctx.loop);
             return .none;
         },
@@ -440,7 +440,7 @@ fn handleEnter(ctx: *InputContext) !bool {
                     cmd.name[command_picker_mod.SKILL_PREFIX.len..]
                 else
                     cmd.name;
-                if (ctx.app.skill_registry.find(bare_name) != null and !ctx.app.is_loading) {
+                if (ctx.app.skill_registry.find(bare_name) != null and !ctx.app.loading.active) {
                     clearInput(ctx);
                     try ctx.app.skillCMD(bare_name);
                     result = .send;
@@ -449,7 +449,7 @@ fn handleEnter(ctx: *InputContext) !bool {
         }
         ctx.command_picker.reset(alloc);
         if (result == .quit) return true;
-        if (result == .send and !ctx.app.is_loading) try spawnLlmRequest(ctx);
+        if (result == .send and !ctx.app.loading.active) try spawnLlmRequest(ctx);
     } else if (ctx.at_picker.active and ctx.at_picker.results.items.len > 0) {
         const picked_path = ctx.at_picker.results.items[ctx.at_picker.selected];
         try ctx.at_picker.addPicked(alloc, picked_path);
@@ -509,7 +509,7 @@ fn handleEnter(ctx: *InputContext) !bool {
     } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0)) {
         const raw_input = ctx.input.items;
 
-        if (ctx.app.is_loading) {
+        if (ctx.app.loading.active) {
             try ctx.app.message_queue.enqueue(alloc, raw_input);
             ctx.draft.clearRetainingCapacity();
             clearInput(ctx);
