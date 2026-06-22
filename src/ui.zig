@@ -551,35 +551,46 @@ pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: age
     if (row >= welcome_win.height) return;
     _ = welcome_win.printSegment(.{ .text = "[Skills]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
-    if (row >= welcome_win.height) return;
-    var col: u16 = 3;
-    for (skills.skills.items, 0..) |skill, idx| {
-        if (idx > 0) {
-            const sep = welcome_win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = col });
-            col = sep.col;
-        }
-        const res = welcome_win.printSegment(.{ .text = skill.name, .style = item_style }, .{ .row_offset = row, .col_offset = col });
-        col = res.col;
-    }
-    row += 1;
+    var writer = WrapWriter{ .win = welcome_win, .style = item_style, .row = row };
+    for (skills.skills.items) |skill| writer.add(skill.name);
+    row = writer.row + 1;
 
     // [MCPs]
     if (row >= welcome_win.height) return;
     _ = welcome_win.printSegment(.{ .text = "[MCPs]", .style = header_style }, .{ .row_offset = row, .col_offset = 1 });
     row += 1;
-    if (row >= welcome_win.height) return;
-    var mcp_col: u16 = 3;
+    var mcp_writer = WrapWriter{ .win = welcome_win, .style = item_style, .row = row };
     var mcp_it = mcps.map.iterator();
-    var mcp_idx: usize = 0;
-    while (mcp_it.next()) |entry| : (mcp_idx += 1) {
-        if (mcp_idx > 0) {
-            const sep = welcome_win.printSegment(.{ .text = ", ", .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
-            mcp_col = sep.col;
-        }
-        const res = welcome_win.printSegment(.{ .text = entry.key_ptr.*, .style = item_style }, .{ .row_offset = row, .col_offset = mcp_col });
-        mcp_col = res.col;
-    }
+    while (mcp_it.next()) |entry| mcp_writer.add(entry.key_ptr.*);
 }
+
+const item_indent: u16 = 3;
+
+const WrapWriter = struct {
+    win: vaxis.Window,
+    style: vaxis.Style,
+    row: u16,
+    col: u16 = item_indent,
+    first: bool = true,
+
+    fn add(self: *WrapWriter, text: []const u8) void {
+        if (self.row >= self.win.height) return;
+        const right_limit = self.win.width -| 1;
+        const len: u16 = @intCast(text.len);
+        if (self.first) {
+            self.first = false;
+        } else if (self.col + 2 + len > right_limit) {
+            self.row += 1;
+            self.col = item_indent;
+            if (self.row >= self.win.height) return;
+        } else {
+            const sep = self.win.printSegment(.{ .text = ", ", .style = self.style }, .{ .row_offset = self.row, .col_offset = self.col, .wrap = .none });
+            self.col = sep.col;
+        }
+        const res = self.win.printSegment(.{ .text = text, .style = self.style }, .{ .row_offset = self.row, .col_offset = self.col, .wrap = .none });
+        self.col = res.col;
+    }
+};
 
 pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_offset: usize) usize {
     const chat_h = chat_win.height;
