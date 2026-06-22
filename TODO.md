@@ -15,7 +15,7 @@
 [] - if file changes after session start,  check and read again
 [] - when comamnds is open show count (1/20)
 [x] - add option to press tab an autocmplete command
-[] - show trust message before start
+[x] - show trust message before start
 [] - option to hide think
 [] - on file picker do not show .gitignore files
 [] - mouse wheel scroll for attachment preview panel

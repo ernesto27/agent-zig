@@ -6,6 +6,24 @@
       "sourceType": "github",
       "computedHash": "a818cdc41dcfaa50dd891c5cb5e5705968338de02e7e37949ca56e8c30ad4176"
     },
+    "deep-research": {
+      "source": "ernesto27/skills",
+      "sourceType": "github",
+      "skillPath": "skills/deep-research/SKILL.md",
+      "computedHash": "59a9a850fb0e77692c24605360a9ee76a13f6636a9c8c7ee01598c175d606d9f"
+    },
+    "plan-from-spec": {
+      "source": "ernesto27/skills",
+      "sourceType": "github",
+      "skillPath": "skills/plan-from-spec/SKILL.md",
+      "computedHash": "8fd2434f6c716b173b65d9526f66f12a53c0a315a8a8691fc08ddea421a03aae"
+    },
+    "tutorial-master": {
+      "source": "ernesto27/skills",
+      "sourceType": "github",
+      "skillPath": "skills/tutorial-master/SKILL.md",
+      "computedHash": "81295f597cc55f381082d3937cb7265f88a7613292f6b40beda3a86c520aaef2"
+    },
     "zig-best-practices": {
       "source": "0xbigboss/claude-code",
       "sourceType": "github",

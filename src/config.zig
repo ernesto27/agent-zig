@@ -58,6 +58,10 @@ pub const SessionEntry = struct {
     file: []const u8 = "",
 };
 
+pub const TrustedFolder = struct {
+    path: []const u8 = "",
+};
+
 pub const HttpHeaders = std.json.ArrayHashMap([]const u8);
 
 /// One `mcpServers` entry from config.json. A server is either stdio
@@ -81,10 +85,16 @@ pub const McpServers = std.json.ArrayHashMap(McpServerConfig);
 pub const Config = struct {
     providers: Providers = .{},
     sessions: []const SessionEntry = &.{},
+    trustedFolders: []const TrustedFolder = &.{},
     mcpServers: McpServers = .{},
     settings: Settings = .{},
     dockerImage: []const u8 = "ubuntu:24.04",
 };
+
+pub fn isTrusted(folders: []const TrustedFolder, cwd: []const u8) bool {
+    for (folders) |f| if (std.mem.eql(u8, f.path, cwd)) return true;
+    return false;
+}
 
 /// Owns the loaded config along with the allocator and parse arena backing it.
 /// All mutating operations live here so call sites don't thread an allocator or
@@ -189,6 +199,23 @@ pub const ConfigStore = struct {
         tmp.sessions = sessions;
         try self.write(tmp);
         self.cfg.sessions = sessions;
+    }
+
+    pub fn addTrustedFolder(self: *ConfigStore, path: []const u8) !void {
+        const allocator = self.arena.allocator();
+
+        const folders = try allocator.alloc(TrustedFolder, self.cfg.trustedFolders.len + 1);
+
+        for (self.cfg.trustedFolders, 0..) |folder, i| {
+            folders[i] = folder;
+        }
+
+        folders[self.cfg.trustedFolders.len] = .{ .path = try allocator.dupe(u8, path) };
+
+        var tmp = self.cfg;
+        tmp.trustedFolders = folders;
+        try self.write(tmp);
+        self.cfg.trustedFolders = folders;
     }
 
     pub fn renameSession(self: *ConfigStore, file: []const u8, new_name: []const u8) !void {

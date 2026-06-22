@@ -7,6 +7,7 @@ const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
+const trust_dialog_mod = @import("trust_dialog.zig");
 const ui = @import("ui.zig");
 const image_attach = @import("image_attach.zig");
 
@@ -26,6 +27,7 @@ pub const InputContext = struct {
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
     mcp_picker: *mcp_picker_mod.McpPicker,
+    trust_dialog: *trust_dialog_mod.TrustDialog,
     spinner_state: *ui.SpinnerState,
     auto_scroll: *bool,
     config: *agent.config.ConfigStore,
@@ -41,6 +43,8 @@ pub const InputContext = struct {
 
 /// Returns true if the app should quit.
 pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
+    if (ctx.trust_dialog.active) return handleTrustDialogKey(ctx, key);
+
     if (key.matches('q', .{ .ctrl = true })) {
         return true;
     } else if (key.matches('t', .{ .ctrl = true })) {
@@ -105,6 +109,30 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         ctx.cursor_pos += 1;
     } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
         if (try handleEnter(ctx)) return true;
+    }
+    return false;
+}
+
+fn handleTrustDialogKey(ctx: *InputContext, key: vaxis.Key) !bool {
+    if (key.matches('q', .{ .ctrl = true }) or key.matches('c', .{ .ctrl = true })) {
+        return true;
+    } else if (key.matches(vaxis.Key.up, .{})) {
+        ctx.trust_dialog.moveUp();
+        ctx.app.needs_redraw = true;
+    } else if (key.matches(vaxis.Key.down, .{})) {
+        ctx.trust_dialog.moveDown();
+        ctx.app.needs_redraw = true;
+    } else if (key.matches('\r', .{}) or key.matches('\n', .{})) {
+        switch (ctx.trust_dialog.selected) {
+            .yes => {
+                ctx.config.addTrustedFolder(ctx.trust_dialog.cwd) catch |err| {
+                    log.err("failed to persist trusted folder: {}", .{err});
+                };
+                ctx.trust_dialog.reset();
+                ctx.app.needs_redraw = true;
+            },
+            .no => return true,
+        }
     }
     return false;
 }
