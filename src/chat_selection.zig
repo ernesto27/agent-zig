@@ -214,7 +214,7 @@ pub fn buildRenderedLines(
     var lines = std.ArrayList(RenderedLine){};
     defer lines.deinit(allocator);
 
-    for (app.messages.items) |*msg| {
+    for (app.messages.view()) |*msg| {
         if (msg.role == .notice) {
             const notice_wrap_w: usize = if (chat_width > 4) chat_width - 4 else 10;
             const wrapped = wrapText(msg.content, notice_wrap_w, 512);

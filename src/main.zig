@@ -381,7 +381,7 @@ pub fn main() !void {
             auto_scroll = true;
         }
 
-        const start = if (app.messages.items.len == 0) blk: {
+        const start = if (app.messages.isEmpty()) blk: {
             const banner_rows: u16 = if (app.latest_version) |v| blk2: {
                 ui.renderUpdateBanner(chat_win, v);
                 break :blk2 1;

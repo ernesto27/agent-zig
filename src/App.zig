@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const context_usage_mod = @import("context_usage.zig");
 const sessions = @import("sessions.zig");
+const messages_mod = @import("messages.zig");
 const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
 const mode_mod = @import("mode.zig");
@@ -12,17 +13,10 @@ const LoadingState = @import("loading_state.zig").LoadingState;
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 
-pub const Role = enum { user, assistant, notice };
+pub const Role = messages_mod.Role;
 pub const Mode = mode_mod.Mode;
 
-pub const Message = struct {
-    role: Role,
-    content: []const u8,
-    thinking: ?[]const u8 = null,
-    styled_lines: ?[]const agent.markdown.StyledLine = null,
-    styled_content_len: usize = 0,
-    is_error: bool = false,
-};
+pub const Message = messages_mod.Message;
 
 pub const ToolConfirmation = struct {
     pending: bool = false,
@@ -74,8 +68,7 @@ pub const App = struct {
     tool_confirmation: ToolConfirmation = .{},
     preview_scroll: usize = 0,
     alloc: std.mem.Allocator,
-    messages: std.ArrayList(Message),
-    llm_history: std.ArrayList(agent.llm.Message),
+    messages: messages_mod.Messages,
     message_queue: agent.message_queue.MessageQueue = .{},
     llm_client: *agent.llm.Client,
     // Borrowed; owned by main(). Live handle to persisted config + settings,
@@ -139,7 +132,6 @@ pub const App = struct {
         return .{
             .alloc = alloc,
             .messages = .{},
-            .llm_history = .{},
             .llm_client = client,
             .pending_attachments = .{},
             .skill_registry = skill_registry,
@@ -176,90 +168,13 @@ pub const App = struct {
         self.mutex.unlock();
     }
 
-    fn freeMessages(self: *Self) void {
-        for (self.messages.items) |*msg| {
-            self.alloc.free(msg.content);
-            if (msg.thinking) |t| self.alloc.free(t);
-            if (msg.styled_lines) |lines| agent.markdown.freeLines(self.alloc, lines);
-        }
-        self.freeLlmHistory();
-    }
-
-    fn freeLlmHistory(self: *Self) void {
-        for (self.llm_history.items) |msg| {
-            switch (msg.content) {
-                .text => |t| self.alloc.free(t),
-                .content_blocks => |blocks| {
-                    for (blocks) |b| {
-                        if (b.text) |t| self.alloc.free(t);
-                        if (b.source) |src| {
-                            self.alloc.free(src.data);
-                            if (src.path) |p| self.alloc.free(p);
-                        }
-                    }
-                    self.alloc.free(blocks);
-                },
-                else => {},
-            }
-        }
-    }
-
-    pub fn appendToHistory(self: *Self, alloc: std.mem.Allocator, text: []const u8) !void {
-        const content = try alloc.dupe(u8, text);
-        try self.llm_history.append(alloc, .{ .role = .user, .content = .{ .text = content } });
-    }
-
-    fn pushHistory(self: *Self, alloc: std.mem.Allocator, msg: agent.llm.Message) void {
-        self.llm_history.append(alloc, msg) catch |err| {
-            log.err("failed to append to llm_history: {}", .{err});
-        };
-        self.sessions.appendMessage(msg);
-    }
-
     pub fn resumeSession(self: *Self, alloc: std.mem.Allocator, filename: []const u8) void {
-        const records = self.sessions.parseSessionFile(alloc, filename) catch |err| {
-            log.err("failed to parse session {s}: {}", .{ filename, err });
-            return;
-        };
-        defer alloc.free(records);
-
-        self.clearHistory();
-        for (records) |rec| {
-            const ui_role: Role = if (rec.role == .assistant) .assistant else .user;
-            self.messages.append(alloc, .{ .role = ui_role, .content = rec.text }) catch {
-                alloc.free(rec.text);
-                continue;
-            };
-            const dup = alloc.dupe(u8, rec.text) catch continue;
-            self.llm_history.append(alloc, .{ .role = rec.role, .content = .{ .text = dup } }) catch alloc.free(dup);
-        }
+        self.messages.resumeSession(alloc, &self.sessions, filename);
         self.needs_redraw = true;
     }
 
-    fn messagesToString(self: *Self) ![]u8 {
-        var buf = std.ArrayList(u8){};
-        errdefer buf.deinit(self.alloc);
-
-        for (self.messages.items) |msg| {
-            const role = switch (msg.role) {
-                .user => "User",
-                .assistant => "Assistant",
-                .notice => "Notice",
-            };
-
-            try buf.writer(self.alloc).print("{s}: {s}\n", .{ role, msg.content });
-            if (msg.thinking) |thinking| {
-                try buf.writer(self.alloc).print("Thinking: {s}\n", .{thinking});
-            }
-        }
-
-        return buf.toOwnedSlice(self.alloc);
-    }
-
     pub fn clearHistory(self: *Self) void {
-        self.freeMessages();
-        self.messages.clearRetainingCapacity();
-        self.llm_history.clearRetainingCapacity();
+        self.messages.clear(self.alloc);
     }
 
     pub fn initCMD(self: *Self) !void {
@@ -269,7 +184,7 @@ pub const App = struct {
     }
 
     fn buildCompactPrompt(self: *Self) ![]const u8 {
-        const transcript = try self.messagesToString();
+        const transcript = try self.messages.toString(self.alloc);
         defer self.alloc.free(transcript);
 
         return compact_mod.Compact.getPrompt(self.alloc, transcript);
@@ -277,8 +192,7 @@ pub const App = struct {
 
     pub fn compactCMD(self: *Self) !void {
         const prompt = try self.buildCompactPrompt();
-        self.freeLlmHistory();
-        self.llm_history.clearRetainingCapacity();
+        self.messages.clearLlmHistory(self.alloc);
         self.clearPendingAttachments();
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
     }
@@ -290,7 +204,7 @@ pub const App = struct {
         try self.sessions.fork(prompt);
 
         self.clearHistory();
-        try self.appendToHistory(self.alloc, prompt);
+        try self.messages.appendToHistory(self.alloc, prompt);
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
     }
 
@@ -335,13 +249,9 @@ pub const App = struct {
     }
 
     pub fn appendNotice(self: *Self, content: []const u8) void {
-        const owned = self.alloc.dupe(u8, content) catch return;
         self.mutex.lock();
         defer self.mutex.unlock();
-        self.messages.append(self.alloc, .{ .role = .notice, .content = owned }) catch {
-            self.alloc.free(owned);
-            return;
-        };
+        self.messages.appendNotice(self.alloc, content);
         self.needs_redraw = true;
     }
 
@@ -418,9 +328,7 @@ pub const App = struct {
         // it touches (self.sandbox, self.messages, self.alloc).
         if (self.sandbox_thread) |t| t.join();
         self.sandbox.stop(self.alloc);
-        self.freeMessages();
         self.messages.deinit(self.alloc);
-        self.llm_history.deinit(self.alloc);
         self.message_queue.deinit(self.alloc);
         self.clearPendingAttachments();
         self.grep_status.deinit(self.alloc);
@@ -492,30 +400,8 @@ pub const App = struct {
         self.preview_scroll = 0;
     }
 
-    fn stripProposedPlanTags(self: *Self, input: []const u8) ![]u8 {
-        const without_open = try std.mem.replaceOwned(u8, self.alloc, input, "<proposed_plan>", "");
-        defer self.alloc.free(without_open);
-        return std.mem.replaceOwned(u8, self.alloc, without_open, "</proposed_plan>", "");
-    }
-
     pub fn getStyledLines(self: *Self, msg: *Message) ![]const agent.markdown.StyledLine {
-        if (msg.styled_lines != null and msg.styled_content_len == msg.content.len) {
-            return msg.styled_lines.?;
-        }
-        if (msg.styled_lines) |old| agent.markdown.freeLines(self.alloc, old);
-        const content = try self.stripProposedPlanTags(msg.content);
-        defer self.alloc.free(content);
-        const lines = try agent.markdown.parse(self.alloc, content);
-        if (msg.is_error) {
-            for (lines) |line| {
-                for (line.spans) |*span| {
-                    span.style.fg = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };
-                }
-            }
-        }
-        msg.styled_lines = lines;
-        msg.styled_content_len = msg.content.len;
-        return msg.styled_lines.?;
+        return msg.styledLines(self.alloc);
     }
 
     const StreamCtx = struct {
@@ -530,7 +416,7 @@ pub const App = struct {
         app.mutex.lock();
         defer app.mutex.unlock();
 
-        const last = app.lastAssistantMessage() orelse return;
+        const last = app.messages.lastAssistant() orelse return;
 
         // Grow the last message's content by appending the new chunk
         const new_content = std.mem.concat(app.alloc, u8, &.{ last.content, chunk }) catch return;
@@ -548,7 +434,7 @@ pub const App = struct {
         app.mutex.lock();
         defer app.mutex.unlock();
 
-        const last = app.lastAssistantMessage() orelse return;
+        const last = app.messages.lastAssistant() orelse return;
 
         if (last.thinking) |existing| {
             const new_thinking = std.mem.concat(app.alloc, u8, &.{ existing, chunk }) catch return;
@@ -560,15 +446,6 @@ pub const App = struct {
 
         app.needs_redraw = true;
         wakeLoop(ctx.loop);
-    }
-
-    fn lastAssistantMessage(self: *Self) ?*Message {
-        var idx = self.messages.items.len;
-        while (idx > 0) {
-            idx -= 1;
-            if (self.messages.items[idx].role == .assistant) return &self.messages.items[idx];
-        }
-        return null;
     }
 
     pub fn shouldCancel(ctx_ptr: *anyopaque) bool {
@@ -647,8 +524,9 @@ pub const App = struct {
 
         // 1. Snapshot the user's message into llm_history
         self.mutex.lock();
-        const last_user_msg = if (self.messages.items.len >= 2)
-            self.messages.items[self.messages.items.len - 2].content
+        const msg_view = self.messages.view();
+        const last_user_msg = if (msg_view.len >= 2)
+            msg_view[msg_view.len - 2].content
         else
             "";
 
@@ -725,13 +603,13 @@ pub const App = struct {
 
         switch (user_text) {
             .text_only => |t| {
-                self.pushHistory(alloc, .{
+                self.messages.pushHistory(alloc, &self.sessions, .{
                     .role = .user,
                     .content = .{ .text = t },
                 });
             },
             .with_images => |blocks| {
-                self.pushHistory(alloc, .{
+                self.messages.pushHistory(alloc, &self.sessions, .{
                     .role = .user,
                     .content = .{ .content_blocks = blocks },
                 });
@@ -755,11 +633,11 @@ pub const App = struct {
         var stream_ctx = StreamCtx{ .app = self, .loop = loop };
 
         while (iteration < max_iterations) : (iteration += 1) {
-            log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.llm_history.items.len });
+            log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.messages.historyLen() });
 
             // Log outgoing messages
-            log.info("--- REQUEST ({d} messages) ---", .{self.llm_history.items.len});
-            for (self.llm_history.items) |msg| {
+            log.info("--- REQUEST ({d} messages) ---", .{self.messages.historyLen()});
+            for (self.messages.historyItems()) |msg| {
                 const role_str = @tagName(msg.role);
                 switch (msg.content) {
                     .text => |t| log.info("[{s}] {s}", .{ role_str, t }),
@@ -775,7 +653,7 @@ pub const App = struct {
 
             const system = self.mode.buildSystemPrompt(alloc, self.system_prompt.content);
             defer if (system) |prompt| alloc.free(prompt);
-            const resp = self.llm_client.sendMessageStreaming(alloc, self.llm_history.items, tool_defs, system, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
+            const resp = self.llm_client.sendMessageStreaming(alloc, self.messages.historyItems(), tool_defs, system, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
                 log.err("sendMessageStreaming failed: {}", .{err});
                 self.mutex.lock();
                 if (err == error.RequestCancelled) {
@@ -790,8 +668,7 @@ pub const App = struct {
                     wakeLoop(loop);
                     return;
                 }
-                if (self.messages.items.len > 0) {
-                    const last = &self.messages.items[self.messages.items.len - 1];
+                if (self.messages.last()) |last| {
                     alloc.free(last.content);
                     const msg = "Service is not working, try later";
                     last.content = alloc.dupe(u8, msg) catch "";
@@ -847,7 +724,7 @@ pub const App = struct {
                 if (text_buf.items.len > 0) {
                     const duped = alloc.dupe(u8, text_buf.items) catch break;
                     self.mutex.lock();
-                    self.pushHistory(alloc, .{
+                    self.messages.pushHistory(alloc, &self.sessions, .{
                         .role = .assistant,
                         .content = .{ .text = duped },
                     });
@@ -872,7 +749,7 @@ pub const App = struct {
                     self.messages.append(alloc, .{ .role = .assistant, .content = placeholder }) catch |err|
                         log.err("queue: append assistant placeholder failed: {}", .{err});
                     // llm_history takes ownership of the dequeued slice.
-                    self.pushHistory(alloc, .{ .role = .user, .content = .{ .text = queued } });
+                    self.messages.pushHistory(alloc, &self.sessions, .{ .role = .user, .content = .{ .text = queued } });
                     self.mutex.unlock();
                     log.info("[assistant] sending queued follow-up: {s}", .{queued});
                     continue;
@@ -900,7 +777,7 @@ pub const App = struct {
                     .input = input_copy,
                 };
             }
-            self.pushHistory(alloc, .{
+            self.messages.pushHistory(alloc, &self.sessions, .{
                 .role = .assistant,
                 .content = .{ .content_blocks = content_blocks },
             });
@@ -1073,7 +950,7 @@ pub const App = struct {
             }
 
             // Append tool results as user message, loop back
-            self.pushHistory(alloc, .{
+            self.messages.pushHistory(alloc, &self.sessions, .{
                 .role = .user,
                 .content = .{ .tool_result_blocks = tool_results },
             });
