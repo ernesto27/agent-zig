@@ -504,6 +504,7 @@ pub fn handleEnter(ctx: *InputContext) !bool {
             if (ctx.config.cfg.providers.forProvider(found.provider.name)) |pc| {
                 ctx.app.llm_client.config.base_url = pc.baseUrl;
                 ctx.app.llm_client.config.api_key = pc.apiKey;
+                agent.config.resolveApiKey(&ctx.app.llm_client.config.api_key, found.provider.name);
                 ctx.app.llm_client.config.effort = ctx.config.thinkEffort(found.provider.name);
                 ctx.config.set(&pc.model, selected.id) catch |err| {
                     log.err("failed to persist model: {}", .{err});

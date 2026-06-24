@@ -96,6 +96,29 @@ pub fn isTrusted(folders: []const TrustedFolder, cwd: []const u8) bool {
     return false;
 }
 
+const apiKeyEnvVars = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "DeepSeek", "DEEPSEEK_API_KEY" },
+});
+
+/// If the provider has a corresponding *_API_KEY env var, return its value
+/// (non-empty). Returns null when the var is not set, empty, or the provider
+/// isn't mapped yet.
+pub fn envApiKey(provider_name: []const u8) ?[]const u8 {
+    const env_var = apiKeyEnvVars.get(provider_name) orelse return null;
+    const key = std.posix.getenv(env_var) orelse return null;
+    if (key.len == 0) return null;
+    return key;
+}
+
+/// If api_key is empty, try the *_API_KEY env var for the given provider.
+/// Logs when the env var fallback is used. Call after reading the config key.
+pub fn resolveApiKey(api_key: *[]const u8, provider_name: []const u8) void {
+    if (api_key.*.len > 0) return;
+    const env_key = envApiKey(provider_name) orelse return;
+    api_key.* = env_key;
+    log.info("using {s}_API_KEY from environment", .{provider_name});
+}
+
 /// Owns the loaded config along with the allocator and parse arena backing it.
 /// All mutating operations live here so call sites don't thread an allocator or
 /// the Config around. `cfg` is the live, in-memory config; `parsed` keeps its

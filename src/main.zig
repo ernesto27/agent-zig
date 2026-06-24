@@ -110,6 +110,7 @@ pub fn main() !void {
         if (config_store.cfg.providers.forProvider(found.provider.name)) |pc| {
             llm_client_cfg.base_url = pc.baseUrl;
             llm_client_cfg.api_key = pc.apiKey;
+            agent.config.resolveApiKey(&llm_client_cfg.api_key, found.provider.name);
             llm_client_cfg.effort = config_store.thinkEffort(found.provider.name);
         }
     }

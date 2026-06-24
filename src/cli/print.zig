@@ -78,6 +78,7 @@ pub fn run(allocator: std.mem.Allocator, prompt: []const u8) !void {
     if (config_store.cfg.providers.forProvider(found.provider.name)) |pc| {
         client_cfg.base_url = pc.baseUrl;
         client_cfg.api_key = pc.apiKey;
+        agent.config.resolveApiKey(&client_cfg.api_key, found.provider.name);
         client_cfg.effort = config_store.thinkEffort(found.provider.name);
     }
     if (client_cfg.api_key.len == 0) {

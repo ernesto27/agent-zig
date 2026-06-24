@@ -9,6 +9,8 @@
 [x] - show image in TUI (PNG preview via Kitty protocol) 
 [x] - show image preview for non-PNG formats (jpg, webp, etc.)
 [x] - render attached text files preview in panel
+[] - prevent crash invalid key in config.json
+[] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
 [] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)
 [x] - add prompt queue
@@ -33,7 +35,6 @@
 [x] - rename session
 [x] - show nice date created in session
 [x] - add a system prompt
-[] - add command tu run as cli query
 [] - option to replace systemp prompt
 [] - add reload
 [] - when change session i want to update usage of context
@@ -76,7 +77,7 @@ hs doing
 [] - somethimes code preview does not show 
 [] - refactor providers llms services
 [] - (low priority / cosmetic) pick ONE convention for method-bearing structs: `const Self = @This();` (App.zig, sandbox.zig) vs spelling out the type name (config.zig ConfigStore, command_picker.zig). Apply to new code; normalize a file only when already editing it.
-[] - when think or executing show time counter
+[x] - when think or executing show time counter
 [] - save conversations to resume
 [] - add arena options to have two models or more doint same task in paraller
 
@@ -85,7 +86,7 @@ hs doing
 high impact:
 [] - git integration: git tool (status/diff/log/commit), /commit and /diff commands, branch + dirty-state in status bar
 [] - task/todo tool: built-in todo_write tool + sidebar panel (pending/in-progress/done) for the agentic loop
-[] - headless CLI query mode: agent -p "..." runs the loop, prints result, exits (scripting/CI)
+[x] - headless CLI query mode: agent -p "..." runs the loop, prints result, exits (scripting/CI)
 
 medium:
 [] - custom slash commands from markdown (.agent/commands/*.md with $ARGUMENTS), mirror skills loader
