@@ -4,6 +4,8 @@ const agent = @import("agent");
 
 pub const MAX_RESULTS = 10;
 pub const SKILL_PREFIX = "skills:";
+const COUNTER_BUF_LEN = 32;
+const COUNTER_FG = vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } };
 
 pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, rename, sandbox, exit };
 
@@ -33,6 +35,7 @@ pub const CommandPicker = struct {
     results: std.ArrayList(Command) = .{},
     selected: usize = 0,
     skill_registry: ?*const agent.skills.Registry = null,
+    counter_buf: [COUNTER_BUF_LEN]u8 = undefined,
 
     pub fn init(skill_registry: ?*const agent.skills.Registry) CommandPicker {
         return .{ .skill_registry = skill_registry };
@@ -106,7 +109,7 @@ pub const CommandPicker = struct {
         return query.len == 0 or std.ascii.indexOfIgnoreCase(name, query) != null;
     }
 
-    pub fn render(self: *const CommandPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
+    pub fn render(self: *CommandPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
         const n: u16 = @intCast(@min(self.results.items.len, MAX_RESULTS));
         const start: usize = if (self.selected < n) 0 else self.selected - n + 1;
         const picker_h: u16 = n + 2;
@@ -157,6 +160,7 @@ pub const CommandPicker = struct {
                     .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
             }, .{ .row_offset = row, .col_offset = desc_col });
         }
+        self.renderCounter(win, picker_y, picker_h);
     }
 
     fn maxNameWidth(self: *const CommandPicker, start: usize, visible_count: u16) u16 {
@@ -168,5 +172,13 @@ pub const CommandPicker = struct {
             width = @max(width, @as(u16, @intCast(self.results.items[idx].name.len + 1)));
         }
         return width;
+    }
+
+    fn renderCounter(self: *CommandPicker, win: vaxis.Window, picker_y: u16, picker_h: u16) void {
+        const text = std.fmt.bufPrint(&self.counter_buf, " ({d}/{d}) ", .{ self.selected + 1, self.results.items.len }) catch return;
+        _ = win.printSegment(
+            .{ .text = text, .style = .{ .fg = COUNTER_FG } },
+            .{ .row_offset = picker_y + picker_h -| 1, .col_offset = 1 },
+        );
     }
 };

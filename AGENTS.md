@@ -37,6 +37,13 @@
 - Logs never go to stderr; inspect `~/.config/agent-zig/agent.log` and `crash.log` when debugging startup, TUI, or panic issues.
 - Session history is file-backed under `~/.config/agent-zig/sessions/*.log`; `/resume`, `/fork`, and rename behavior are backed by `src/sessions.zig` plus entries persisted in `config.json`.
 
+## Git And Commit Conventions
+
+- Do not commit automatically. After making changes, leave them in the working tree (unstaged) and commit only when explicitly asked.
+- Work directly on `master`. Do not create feature branches for changes, even when running plan/execution workflows that default to branching.
+- Commit messages are a single-line subject only: no body, no bullet description.
+- Never add a `Co-Authored-By` trailer to commits.
+
 ## UI Commands
 
 - Slash commands currently include `/provider`, `/model`, `/clear`, `/compact`, `/fork`, `/resume`, `/init`, `/mcp`, `/rename`, `/sandbox`, and `/exit` (`src/commands/command_picker.zig`).
