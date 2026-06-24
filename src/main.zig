@@ -18,6 +18,7 @@ const input_handler = @import("input_handler.zig");
 const attach_preview = @import("attach_preview.zig");
 const cli = @import("cli/common.zig");
 const update = @import("cli/update.zig");
+const print = @import("cli/print.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -56,6 +57,13 @@ pub fn main() !void {
     var first_message: ?[]const u8 = null;
     if (args.len > 1) {
         const cmd = args[1];
+
+        if (std.mem.eql(u8, cmd, "-p") or std.mem.eql(u8, cmd, "--print")) {
+            const prompt = if (args.len > 2) args[2] else "";
+            print.run(alloc, prompt) catch std.process.exit(1);
+            return;
+        }
+
         if (cli.dispatch(alloc, cmd)) return;
 
         first_message = cmd;

@@ -7,6 +7,7 @@ const messages_mod = @import("messages.zig");
 const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
 const mode_mod = @import("mode.zig");
+const agent_loop = @import("agent_loop.zig");
 const image_attach = @import("image_attach.zig");
 const LoadingState = @import("loading_state.zig").LoadingState;
 
@@ -104,6 +105,9 @@ pub const App = struct {
     // can join it — a slow image pull/worktree create must not outlive the app
     // and touch freed state. Mirrors `mcp_load_thread`.
     sandbox_thread: ?std.Thread = null,
+    // Set by fetchAiResponse so the Host hook methods can wakeLoop without the
+    // engine having to thread the event loop through.
+    active_loop: ?*EventLoop = null,
 
     const Self = @This();
     const log = std.log.scoped(.app);
@@ -404,57 +408,253 @@ pub const App = struct {
         return msg.styledLines(self.alloc);
     }
 
-    const StreamCtx = struct {
-        app: *Self,
-        loop: *EventLoop,
-    };
+    // === agent_loop.Host implementation ===
+    // The engine in agent_loop.zig drives the think→tool→loop and calls back
+    // into these methods for every side-effect. Locking lives here (not in the
+    // engine), preserving the TUI's mutex discipline.
 
-    fn onChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
-        const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
-        const app = ctx.app;
+    pub fn historyItems(self: *Self) []const agent.llm.message.Message {
+        return self.messages.historyItems();
+    }
 
-        app.mutex.lock();
-        defer app.mutex.unlock();
+    pub fn pushHistory(self: *Self, msg: agent.llm.message.Message) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.messages.pushHistory(self.alloc, &self.sessions, msg);
+    }
 
-        const last = app.messages.lastAssistant() orelse return;
+    pub fn onChunk(self: *Self, chunk: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        // Grow the last message's content by appending the new chunk
-        const new_content = std.mem.concat(app.alloc, u8, &.{ last.content, chunk }) catch return;
-        app.alloc.free(last.content);
+        const last = self.messages.lastAssistant() orelse return;
+        const new_content = std.mem.concat(self.alloc, u8, &.{ last.content, chunk }) catch return;
+        self.alloc.free(last.content);
         last.content = new_content;
 
-        app.needs_redraw = true;
-        wakeLoop(ctx.loop);
+        self.needs_redraw = true;
+        if (self.active_loop) |l| wakeLoop(l);
     }
 
-    fn onThinkingChunk(ctx_ptr: *anyopaque, chunk: []const u8) void {
-        const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
-        const app = ctx.app;
+    pub fn onThinkingChunk(self: *Self, chunk: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        app.mutex.lock();
-        defer app.mutex.unlock();
-
-        const last = app.messages.lastAssistant() orelse return;
-
+        const last = self.messages.lastAssistant() orelse return;
         if (last.thinking) |existing| {
-            const new_thinking = std.mem.concat(app.alloc, u8, &.{ existing, chunk }) catch return;
-            app.alloc.free(existing);
+            const new_thinking = std.mem.concat(self.alloc, u8, &.{ existing, chunk }) catch return;
+            self.alloc.free(existing);
             last.thinking = new_thinking;
         } else {
-            last.thinking = app.alloc.dupe(u8, chunk) catch return;
+            last.thinking = self.alloc.dupe(u8, chunk) catch return;
         }
 
-        app.needs_redraw = true;
-        wakeLoop(ctx.loop);
+        self.needs_redraw = true;
+        if (self.active_loop) |l| wakeLoop(l);
     }
 
-    pub fn shouldCancel(ctx_ptr: *anyopaque) bool {
-        const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
-        const app = ctx.app;
+    pub fn shouldCancel(self: *Self) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.cancel_requested;
+    }
 
-        app.mutex.lock();
-        defer app.mutex.unlock();
-        return app.cancel_requested;
+    pub fn isToolAllowed(self: *Self, name: []const u8, input: std.json.Value) mode_mod.ToolPolicy {
+        return self.mode.isToolAllowed(name, input);
+    }
+
+    pub fn onUsage(self: *Self, usage: agent.llm.message.Usage) void {
+        self.context_usage.tokensCount = @intCast(usage.input_tokens + usage.output_tokens);
+        if (agent.llm.providers.findModel(self.llm_client.config.model)) |found| {
+            self.context_usage.tokensPercentage = self.context_usage.tokensCount * 100 / found.model.max_context;
+        }
+    }
+
+    pub fn onRequestError(self: *Self, _: anyerror) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.messages.last()) |last| {
+            self.alloc.free(last.content);
+            last.content = self.alloc.dupe(u8, "Service is not working, try later") catch "";
+            last.is_error = true;
+        }
+    }
+
+    pub fn onFinished(self: *Self, _: agent_loop.Outcome) void {
+        self.mutex.lock();
+        self.loading.stop();
+        self.tool_status = null;
+        self.clearGrepStatus();
+        self.clearGlobStatus();
+        self.clearWebStatus();
+        self.cancel_requested = false;
+        self.needs_redraw = true;
+        self.mutex.unlock();
+        if (self.active_loop) |l| wakeLoop(l);
+    }
+
+    pub fn onToolsComplete(self: *Self) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.tool_status = null;
+    }
+
+    pub fn confirmTool(self: *Self, name: []const u8, input: std.json.Value) agent_loop.Decision {
+        if (self.tool_confirmation.cursor == .accept_all) return .approve;
+
+        const needs_confirmation =
+            std.mem.eql(u8, name, "write_file") or
+            std.mem.eql(u8, name, "edit_file") or
+            std.mem.eql(u8, name, "bash") or
+            std.mem.startsWith(u8, name, "mcp__");
+        if (!needs_confirmation) return .approve;
+
+        // Strings stored in tool_confirmation below must live until the user
+        // resolves the dialog; this arena outlives the cond.wait and is freed on
+        // return (after pending=false, so the UI no longer reads them).
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const is_bash = std.mem.eql(u8, name, "bash");
+        const is_mcp = std.mem.startsWith(u8, name, "mcp__");
+
+        var mcp_fp: []const u8 = "";
+        var mcp_body: []const u8 = "";
+        if (is_mcp) {
+            const rest = name["mcp__".len..];
+            if (std.mem.indexOf(u8, rest, "__")) |sep| {
+                mcp_fp = std.fmt.allocPrint(arena_alloc, "{s}.{s}", .{ rest[0..sep], rest[sep + 2 ..] }) catch name;
+            } else {
+                mcp_fp = name;
+            }
+            const json_pretty = std.json.Stringify.valueAlloc(arena_alloc, input, .{ .whitespace = .indent_2 }) catch "";
+            if (self.mcp_registry.findDescriptionForPrefixed(name)) |desc| {
+                mcp_body = std.fmt.allocPrint(arena_alloc, "{s}\n\n{s}", .{ desc, json_pretty }) catch json_pretty;
+            } else {
+                mcp_body = json_pretty;
+            }
+        }
+
+        const fp = if (is_mcp) mcp_fp else if (is_bash)
+            agent.tools.getStringField(input, "command") orelse ""
+        else
+            agent.tools.getStringField(input, "file_path") orelse "";
+        const cnt = if (is_mcp) mcp_body else (agent.tools.getStringField(input, "content") orelse "");
+        const old_s = if (is_mcp) "" else (agent.tools.getStringField(input, "old_string") orelse "");
+        const new_s = if (is_mcp) "" else (agent.tools.getStringField(input, "new_string") orelse "");
+
+        self.mutex.lock();
+        self.loading.pause();
+        self.tool_confirmation.pending = true;
+        self.tool_confirmation.tool_name = name;
+        self.tool_confirmation.file_path = fp;
+        self.tool_confirmation.content = cnt;
+        self.tool_confirmation.old_string = old_s;
+        self.tool_confirmation.new_string = new_s;
+        self.tool_confirmation.cursor = .approve;
+        self.preview_scroll = 0;
+        self.tool_status = name;
+        self.needs_redraw = true;
+        self.mutex.unlock();
+        if (self.active_loop) |l| wakeLoop(l);
+
+        self.mutex.lock();
+        while (self.tool_confirmation.pending) {
+            self.tool_confirmation.cond.wait(&self.mutex);
+        }
+        const approved = self.tool_confirmation.cursor != .deny;
+        self.mutex.unlock();
+
+        return if (approved) .approve else .deny;
+    }
+
+    pub fn onToolActivity(self: *Self, name: []const u8, input: std.json.Value) void {
+        if (std.mem.eql(u8, name, "grep")) {
+            self.mutex.lock();
+            self.tool_status = name;
+            self.setGrepStatus(
+                agent.tools.getStringField(input, "pattern") orelse "",
+                agent.tools.getStringField(input, "path") orelse ".",
+                agent.tools.getStringField(input, "include") orelse "",
+            );
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            if (self.active_loop) |l| wakeLoop(l);
+        }
+
+        if (std.mem.eql(u8, name, "glob")) {
+            self.mutex.lock();
+            self.tool_status = name;
+            self.setGlobStatus(
+                agent.tools.getStringField(input, "pattern") orelse "",
+                agent.tools.getStringField(input, "path") orelse ".",
+            );
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            if (self.active_loop) |l| wakeLoop(l);
+        }
+
+        if (std.mem.eql(u8, name, "web_search")) {
+            const query = agent.tools.getStringField(input, "query") orelse "";
+            const label = std.fmt.allocPrint(self.alloc, "Web Search(\"{s}\")", .{query}) catch "Web Search()";
+            self.mutex.lock();
+            self.tool_status = name;
+            self.setWebStatus(label);
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            self.alloc.free(label);
+            if (self.active_loop) |l| wakeLoop(l);
+        }
+
+        if (std.mem.eql(u8, name, "web_extract")) {
+            const target = self.summarizeUrls(agent.tools.getField(input, "urls") orelse .null);
+            const label = std.fmt.allocPrint(self.alloc, "Web Extract(\"{s}\")", .{target}) catch "Web Extract()";
+            self.mutex.lock();
+            self.tool_status = name;
+            self.setWebStatus(label);
+            self.needs_redraw = true;
+            self.mutex.unlock();
+            self.alloc.free(target);
+            self.alloc.free(label);
+            if (self.active_loop) |l| wakeLoop(l);
+        }
+    }
+
+    pub fn onToolResult(self: *Self, name: []const u8, input: std.json.Value, result: agent.tools.ToolResult) void {
+        if (!result.is_error and std.mem.eql(u8, name, "skill")) {
+            if (agent.tools.getStringField(input, "name")) |skill_name| {
+                self.appendSkillNotice(skill_name);
+                if (self.active_loop) |l| wakeLoop(l);
+            }
+        }
+        if (!result.is_error and std.mem.eql(u8, name, "skill_script")) {
+            if (agent.tools.getStringField(input, "skill")) |skill_name| {
+                if (agent.tools.getStringField(input, "path")) |script_path| {
+                    self.appendSkillScriptNotice(skill_name, script_path);
+                    if (self.active_loop) |l| wakeLoop(l);
+                }
+            }
+        }
+    }
+
+    pub fn dequeueFollowUp(self: *Self) ?[]const u8 {
+        const queued = self.message_queue.dequeue() orelse return null;
+        self.mutex.lock();
+        const ui_user = self.alloc.dupe(u8, queued) catch {
+            self.alloc.free(queued);
+            self.mutex.unlock();
+            return null;
+        };
+        // 0-byte dupe can't fail; needs to be heap so freeMessages frees it.
+        const placeholder = self.alloc.dupe(u8, "") catch unreachable;
+        self.messages.append(self.alloc, .{ .role = .user, .content = ui_user }) catch |err|
+            log.err("queue: append user message failed: {}", .{err});
+        self.messages.append(self.alloc, .{ .role = .assistant, .content = placeholder }) catch |err|
+            log.err("queue: append assistant placeholder failed: {}", .{err});
+        self.mutex.unlock();
+        log.info("[assistant] sending queued follow-up: {s}", .{queued});
+        return queued;
     }
 
     pub fn cancelActiveRequest(self: *Self, loop: *EventLoop) bool {
@@ -521,6 +721,7 @@ pub const App = struct {
     /// Background thread: sends messages to LLM, executes tools, loops until done
     pub fn fetchAiResponse(self: *Self, loop: *EventLoop) void {
         const alloc = self.alloc;
+        self.active_loop = loop;
 
         // 1. Snapshot the user's message into llm_history
         self.mutex.lock();
@@ -617,362 +818,22 @@ pub const App = struct {
         }
         self.mutex.unlock();
 
-        // 2. Get tool definitions (arena keeps parsed JSON alive)
+        // 2. Build tool defs (arena keeps parsed JSON alive) and run the shared
+        //    agentic loop. Every side-effect is delegated back to App through the
+        //    Host hook methods above (locking, streaming, confirmation, status,
+        //    queued follow-ups, sessions, error bubbles, final cleanup).
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
-        const arena_alloc = arena.allocator();
         const tool_ctx = agent.tools.Context{
             .skill_registry = &self.skill_registry,
             .mcp_registry = &self.mcp_registry,
             .sandbox = &self.sandbox,
         };
-        const tool_defs = agent.tools.getDefinitions(arena_alloc, tool_ctx) catch &.{};
+        const tool_defs = agent.tools.getDefinitions(arena.allocator(), tool_ctx) catch &.{};
 
-        const max_iterations = 10;
-        var iteration: usize = 0;
-        var stream_ctx = StreamCtx{ .app = self, .loop = loop };
+        const system = self.mode.buildSystemPrompt(alloc, self.system_prompt.content);
+        defer if (system) |prompt| alloc.free(prompt);
 
-        while (iteration < max_iterations) : (iteration += 1) {
-            log.info("agentic loop iteration {d}, history size {d}", .{ iteration, self.messages.historyLen() });
-
-            // Log outgoing messages
-            log.info("--- REQUEST ({d} messages) ---", .{self.messages.historyLen()});
-            for (self.messages.historyItems()) |msg| {
-                const role_str = @tagName(msg.role);
-                switch (msg.content) {
-                    .text => |t| log.info("[{s}] {s}", .{ role_str, t }),
-                    .tool_result_blocks => |blocks| for (blocks) |b| {
-                        log.info("[{s}] tool_result id={s} content={s}", .{ role_str, b.tool_use_id, b.content });
-                    },
-                    .content_blocks => |blocks| for (blocks) |b| {
-                        if (b.text) |t| log.info("[{s}] text: {s}", .{ role_str, t });
-                        if (b.name) |n| log.info("[{s}] tool_use: {s}", .{ role_str, n });
-                    },
-                }
-            }
-
-            const system = self.mode.buildSystemPrompt(alloc, self.system_prompt.content);
-            defer if (system) |prompt| alloc.free(prompt);
-            const resp = self.llm_client.sendMessageStreaming(alloc, self.messages.historyItems(), tool_defs, system, &stream_ctx, onChunk, onThinkingChunk, shouldCancel) catch |err| {
-                log.err("sendMessageStreaming failed: {}", .{err});
-                self.mutex.lock();
-                if (err == error.RequestCancelled) {
-                    self.loading.stop();
-                    self.tool_status = null;
-                    self.clearGrepStatus();
-                    self.clearGlobStatus();
-                    self.clearWebStatus();
-                    self.cancel_requested = false;
-                    self.needs_redraw = true;
-                    self.mutex.unlock();
-                    wakeLoop(loop);
-                    return;
-                }
-                if (self.messages.last()) |last| {
-                    alloc.free(last.content);
-                    const msg = "Service is not working, try later";
-                    last.content = alloc.dupe(u8, msg) catch "";
-                    last.is_error = true;
-                }
-                self.mutex.unlock();
-                break;
-            };
-            defer resp.deinit();
-
-            const response = resp.value;
-            log.info("--- RESPONSE stop_reason={s} tokens={d}in/{d}out ---", .{
-                response.stop_reason orelse "null",
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            });
-            self.context_usage.tokensCount = @intCast(response.usage.input_tokens + response.usage.output_tokens);
-            if (agent.llm.providers.findModel(self.llm_client.config.model)) |found| {
-                self.context_usage.tokensPercentage = self.context_usage.tokensCount * 100 / found.model.max_context;
-            }
-            for (response.content) |block| {
-                if (std.mem.eql(u8, block.type, "text")) {
-                    log.info("[assistant] text: {s}", .{block.text orelse ""});
-                } else if (std.mem.eql(u8, block.type, "tool_use")) {
-                    log.info("[assistant] tool_use: {s} id={s}", .{ block.name orelse "", block.id orelse "" });
-                }
-            }
-
-            // Collect text and tool_use blocks
-            var text_buf = std.ArrayList(u8){};
-            defer text_buf.deinit(alloc);
-
-            const ToolUse = struct { id: []const u8, name: []const u8, input: std.json.Value };
-            var tool_uses = std.ArrayList(ToolUse){};
-            defer tool_uses.deinit(alloc);
-
-            for (response.content) |block| {
-                if (std.mem.eql(u8, block.type, "text")) {
-                    if (block.text) |t| text_buf.appendSlice(alloc, t) catch {};
-                } else if (std.mem.eql(u8, block.type, "tool_use")) {
-                    tool_uses.append(alloc, .{
-                        .id = alloc.dupe(u8, block.id orelse "") catch "",
-                        .name = alloc.dupe(u8, block.name orelse "") catch "",
-                        .input = block.input,
-                    }) catch {};
-                }
-            }
-
-            // Check stop reason
-            const is_tool_use = if (response.stop_reason) |sr| std.mem.eql(u8, sr, "tool_use") else false;
-            if (!is_tool_use or tool_uses.items.len == 0) {
-                // No tools — append assistant text to history and donex
-                if (text_buf.items.len > 0) {
-                    const duped = alloc.dupe(u8, text_buf.items) catch break;
-                    self.mutex.lock();
-                    self.messages.pushHistory(alloc, &self.sessions, .{
-                        .role = .assistant,
-                        .content = .{ .text = duped },
-                    });
-                    self.mutex.unlock();
-                }
-
-                // If the user queued a message while loading, send it as the
-                // next user turn instead of finishing the loop.
-                if (self.message_queue.dequeue()) |queued| {
-                    self.mutex.lock();
-                    const ui_user = alloc.dupe(u8, queued) catch {
-                        alloc.free(queued);
-                        self.mutex.unlock();
-                        break;
-                    };
-                    // 0-byte dupe can't fail; needs to be heap so freeMessages frees it.
-                    const placeholder = alloc.dupe(u8, "") catch unreachable;
-                    // UI: show the queued user message + an empty assistant
-                    // bubble for the next streamed response.
-                    self.messages.append(alloc, .{ .role = .user, .content = ui_user }) catch |err|
-                        log.err("queue: append user message failed: {}", .{err});
-                    self.messages.append(alloc, .{ .role = .assistant, .content = placeholder }) catch |err|
-                        log.err("queue: append assistant placeholder failed: {}", .{err});
-                    // llm_history takes ownership of the dequeued slice.
-                    self.messages.pushHistory(alloc, &self.sessions, .{ .role = .user, .content = .{ .text = queued } });
-                    self.mutex.unlock();
-                    log.info("[assistant] sending queued follow-up: {s}", .{queued});
-                    continue;
-                }
-                break;
-            }
-
-            // Append assistant's tool_use blocks to history.
-            // Deep-copy block.input: the source lives in resp's arena which is freed after
-            // this fetchAiResponse call ends, but llm_history must survive across calls.
-            const content_blocks = alloc.alloc(agent.llm.message.ContentBlock, response.content.len) catch break;
-            for (response.content, 0..) |block, i| {
-                const input_copy: std.json.Value = if (block.input != .null) blk: {
-                    const json_str = std.json.Stringify.valueAlloc(alloc, block.input, .{}) catch break :blk .null;
-                    defer alloc.free(json_str);
-                    break :blk std.json.parseFromSliceLeaky(std.json.Value, alloc, json_str, .{}) catch .null;
-                } else .null;
-                content_blocks[i] = .{
-                    .type = alloc.dupe(u8, block.type) catch "",
-                    .text = if (block.text) |t| alloc.dupe(u8, t) catch null else null,
-                    .thinking = if (block.thinking) |t| alloc.dupe(u8, t) catch null else null,
-                    .signature = if (block.signature) |s| alloc.dupe(u8, s) catch null else null,
-                    .id = if (block.id) |id| alloc.dupe(u8, id) catch null else null,
-                    .name = if (block.name) |n| alloc.dupe(u8, n) catch null else null,
-                    .input = input_copy,
-                };
-            }
-            self.messages.pushHistory(alloc, &self.sessions, .{
-                .role = .assistant,
-                .content = .{ .content_blocks = content_blocks },
-            });
-
-            // Execute each tool
-            const tool_results = alloc.alloc(agent.llm.message.ToolResultBlock, tool_uses.items.len) catch break;
-            var any_denied = false;
-            for (tool_uses.items, 0..) |tool_use, i| {
-                log.info("executing tool: {s}", .{tool_use.name});
-
-                const policy = self.mode.isToolAllowed(tool_use.name, tool_use.input);
-                if (!policy.ok) {
-                    tool_results[i] = .{
-                        .tool_use_id = tool_use.id,
-                        .content = policy.reason,
-                        .is_error = true,
-                    };
-                    any_denied = true;
-                    continue;
-                }
-
-                if (self.tool_confirmation.cursor != .accept_all) {
-                    const needs_confirmation =
-                        std.mem.eql(u8, tool_use.name, "write_file") or
-                        std.mem.eql(u8, tool_use.name, "edit_file") or
-                        std.mem.eql(u8, tool_use.name, "bash") or
-                        std.mem.startsWith(u8, tool_use.name, "mcp__");
-
-                    if (needs_confirmation) {
-                        const is_bash = std.mem.eql(u8, tool_use.name, "bash");
-                        const is_mcp = std.mem.startsWith(u8, tool_use.name, "mcp__");
-
-                        // For MCP tools we don't have a single "file_path"
-                        // or "content" — synthesize a header (server.tool)
-                        // and a pretty-printed JSON of the input so the user
-                        // can actually see what's about to run.
-                        var mcp_fp: []const u8 = "";
-                        var mcp_body: []const u8 = "";
-                        if (is_mcp) {
-                            const rest = tool_use.name["mcp__".len..];
-                            if (std.mem.indexOf(u8, rest, "__")) |sep| {
-                                mcp_fp = std.fmt.allocPrint(arena_alloc, "{s}.{s}", .{ rest[0..sep], rest[sep + 2 ..] }) catch tool_use.name;
-                            } else {
-                                mcp_fp = tool_use.name;
-                            }
-                            const json_pretty = std.json.Stringify.valueAlloc(arena_alloc, tool_use.input, .{ .whitespace = .indent_2 }) catch "";
-                            // Prepend the tool's MCP-advertised description
-                            // so the user knows what the call will actually
-                            // do before approving.
-                            if (self.mcp_registry.findDescriptionForPrefixed(tool_use.name)) |desc| {
-                                mcp_body = std.fmt.allocPrint(arena_alloc, "{s}\n\n{s}", .{ desc, json_pretty }) catch json_pretty;
-                            } else {
-                                mcp_body = json_pretty;
-                            }
-                        }
-
-                        const fp = if (is_mcp) mcp_fp else if (is_bash)
-                            agent.tools.getStringField(tool_use.input, "command") orelse ""
-                        else
-                            agent.tools.getStringField(tool_use.input, "file_path") orelse "";
-                        const cnt = if (is_mcp) mcp_body else (agent.tools.getStringField(tool_use.input, "content") orelse "");
-                        const old_s = if (is_mcp) "" else (agent.tools.getStringField(tool_use.input, "old_string") orelse "");
-                        const new_s = if (is_mcp) "" else (agent.tools.getStringField(tool_use.input, "new_string") orelse "");
-
-                        self.mutex.lock();
-                        self.loading.pause();
-                        self.tool_confirmation.pending = true;
-                        self.tool_confirmation.tool_name = tool_use.name;
-                        self.tool_confirmation.file_path = fp;
-                        self.tool_confirmation.content = cnt;
-                        self.tool_confirmation.old_string = old_s;
-                        self.tool_confirmation.new_string = new_s;
-                        self.tool_confirmation.cursor = .approve;
-                        self.preview_scroll = 0;
-                        self.tool_status = tool_use.name;
-                        self.needs_redraw = true;
-                        self.mutex.unlock();
-                        wakeLoop(loop);
-
-                        self.mutex.lock();
-                        while (self.tool_confirmation.pending) {
-                            self.tool_confirmation.cond.wait(&self.mutex);
-                        }
-                        const approved = self.tool_confirmation.cursor != .deny;
-                        self.mutex.unlock();
-
-                        if (!approved) {
-                            tool_results[i] = .{
-                                .tool_use_id = tool_use.id,
-                                .content = "User denied permission",
-                                .is_error = true,
-                            };
-                            any_denied = true;
-                            continue;
-                        }
-                    }
-                }
-
-                if (std.mem.eql(u8, tool_use.name, "grep")) {
-                    self.mutex.lock();
-                    self.tool_status = tool_use.name;
-                    self.setGrepStatus(
-                        agent.tools.getStringField(tool_use.input, "pattern") orelse "",
-                        agent.tools.getStringField(tool_use.input, "path") orelse ".",
-                        agent.tools.getStringField(tool_use.input, "include") orelse "",
-                    );
-                    self.needs_redraw = true;
-                    self.mutex.unlock();
-                    wakeLoop(loop);
-                }
-
-                if (std.mem.eql(u8, tool_use.name, "glob")) {
-                    self.mutex.lock();
-                    self.tool_status = tool_use.name;
-                    self.setGlobStatus(
-                        agent.tools.getStringField(tool_use.input, "pattern") orelse "",
-                        agent.tools.getStringField(tool_use.input, "path") orelse ".",
-                    );
-                    self.needs_redraw = true;
-                    self.mutex.unlock();
-                    wakeLoop(loop);
-                }
-
-                if (std.mem.eql(u8, tool_use.name, "web_search")) {
-                    const query = agent.tools.getStringField(tool_use.input, "query") orelse "";
-                    const label = std.fmt.allocPrint(self.alloc, "Web Search(\"{s}\")", .{query}) catch "Web Search()";
-                    self.mutex.lock();
-                    self.tool_status = tool_use.name;
-                    self.setWebStatus(label);
-                    self.needs_redraw = true;
-                    self.mutex.unlock();
-                    self.alloc.free(label);
-                    wakeLoop(loop);
-                }
-
-                if (std.mem.eql(u8, tool_use.name, "web_extract")) {
-                    const target = self.summarizeUrls(agent.tools.getField(tool_use.input, "urls") orelse .null);
-                    const label = std.fmt.allocPrint(self.alloc, "Web Extract(\"{s}\")", .{target}) catch "Web Extract()";
-                    self.mutex.lock();
-                    self.tool_status = tool_use.name;
-                    self.setWebStatus(label);
-                    self.needs_redraw = true;
-                    self.mutex.unlock();
-                    self.alloc.free(target);
-                    self.alloc.free(label);
-                    wakeLoop(loop);
-                }
-
-                const result = agent.tools.execute(alloc, tool_ctx, tool_use.name, tool_use.input);
-                log.info("tool result: is_error={}, content_len={d}", .{ result.is_error, result.content.len });
-                if (!result.is_error and std.mem.eql(u8, tool_use.name, "skill")) {
-                    if (agent.tools.getStringField(tool_use.input, "name")) |skill_name| {
-                        self.appendSkillNotice(skill_name);
-                        wakeLoop(loop);
-                    }
-                }
-                if (!result.is_error and std.mem.eql(u8, tool_use.name, "skill_script")) {
-                    if (agent.tools.getStringField(tool_use.input, "skill")) |skill_name| {
-                        if (agent.tools.getStringField(tool_use.input, "path")) |script_path| {
-                            self.appendSkillScriptNotice(skill_name, script_path);
-                            wakeLoop(loop);
-                        }
-                    }
-                }
-                tool_results[i] = .{
-                    .tool_use_id = tool_use.id,
-                    .content = result.content,
-                    .is_error = result.is_error,
-                };
-            }
-
-            // Append tool results as user message, loop back
-            self.messages.pushHistory(alloc, &self.sessions, .{
-                .role = .user,
-                .content = .{ .tool_result_blocks = tool_results },
-            });
-
-            if (any_denied) break;
-
-            log.info("tool results appended, looping back", .{});
-            self.mutex.lock();
-            self.tool_status = null;
-            self.mutex.unlock();
-        }
-
-        // Done
-        self.mutex.lock();
-        self.loading.stop();
-        self.tool_status = null;
-        self.clearGrepStatus();
-        self.clearGlobStatus();
-        self.clearWebStatus();
-        self.cancel_requested = false;
-        self.needs_redraw = true;
-        self.mutex.unlock();
-        wakeLoop(loop);
+        _ = agent_loop.run(Self, self, alloc, self.llm_client, tool_ctx, tool_defs, system, .{});
     }
 };
