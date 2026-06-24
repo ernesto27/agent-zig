@@ -448,7 +448,7 @@ fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
     }
 }
 
-fn handleEnter(ctx: *InputContext) !bool {
+pub fn handleEnter(ctx: *InputContext) !bool {
     const alloc = ctx.alloc;
     if (ctx.app.tool_confirmation.pending) {
         try ctx.app.resolveToolConfirmation(alloc, ctx.app.tool_confirmation.cursor);

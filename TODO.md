@@ -9,9 +9,10 @@
 [x] - show image in TUI (PNG preview via Kitty protocol) 
 [x] - show image preview for non-PNG formats (jpg, webp, etc.)
 [x] - render attached text files preview in panel
+[] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)
 [x] - add prompt queue
-[] - when ask appears ,  stop count seconds
+[x] - when ask appears ,  stop count seconds
 [] - if file changes after session start,  check and read again
 [] - when comamnds is open show count (1/20)
 [x] - add option to press tab an autocmplete command
@@ -22,13 +23,6 @@
 [] - add brave for searching
 [] - show preview of sessions
 [x] - save session in jsonl
-[x] - on start TUI show this info 
-[Context]
-  AGENTS.md
-[Skills]
-  caveman, commit-push, find-skills, update-todo, zig-best-practices, zig-review
-[MCPs]
-  list
 [x] - save think in config.json
 [] - command to copy to clipboar current session
 [x] - only accept attach of images
@@ -36,7 +30,7 @@
 [] - when run skill,  execute
 [] - export data to html
 [] - share session using gist
-[] - rename session
+[x] - rename session
 [x] - show nice date created in session
 [x] - add a system prompt
 [] - add command tu run as cli query
@@ -47,7 +41,7 @@
 [x] - create github actions ,  build TUI
 [x] - compact session
 [x] - fork session ,  new context
-[] - add provider google
+[x] - add provider google
 [] - connect to provider github copilot
 [x] - save command result in history to resume
 [x] - add option to run command bash
@@ -64,7 +58,7 @@
 [x] - show seconds, mins, in feedback, now only show seconds
 [x] - clear conversation 
 [x] - agent.log must be save in .config folder
-[x] - refactor render 
+[x] - refactor render
 [x] - when sho preview file,  put scroll at top
 [x] - add plan mode
 [] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
@@ -85,6 +79,23 @@ hs doing
 [] - when think or executing show time counter
 [] - save conversations to resume
 [] - add arena options to have two models or more doint same task in paraller
+
+## Feature ideas (ranked)
+
+high impact:
+[] - git integration: git tool (status/diff/log/commit), /commit and /diff commands, branch + dirty-state in status bar
+[] - task/todo tool: built-in todo_write tool + sidebar panel (pending/in-progress/done) for the agentic loop
+[] - headless CLI query mode: agent -p "..." runs the loop, prints result, exits (scripting/CI)
+
+medium:
+[] - custom slash commands from markdown (.agent/commands/*.md with $ARGUMENTS), mirror skills loader
+[] - export / share session: render session jsonl to HTML or push to a GitHub gist
+[] - auto re-read changed files: detect on-disk change after read and refresh context
+
+polish / harder:
+[] - syntax highlighting + markdown rendering in chat (extend src/markdown.zig)
+[] - LSP integration: feed compiler diagnostics back to the agent
+[] - multi-agent arena: run two models on the same task in parallel and compare
 
 ## Sandbox (Docker)
 

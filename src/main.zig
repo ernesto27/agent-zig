@@ -23,6 +23,8 @@ const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 const app_version = agent.build.version;
 
+const log = std.log.scoped(.main);
+
 fn versionCheckThread(app: *App, loop: *EventLoop) void {
     const v = update.checkNewVersion(app.alloc) catch null;
     if (v) |ver| {
@@ -51,12 +53,12 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
+    var first_message: ?[]const u8 = null;
     if (args.len > 1) {
         const cmd = args[1];
         if (cli.dispatch(alloc, cmd)) return;
 
-        std.debug.print("unknown command: {s}\n", .{cmd});
-        std.process.exit(1);
+        first_message = cmd;
     }
 
     try log_mod.Logger.init(alloc);
@@ -486,5 +488,18 @@ pub fn main() !void {
         try vx.render(tty.writer());
         app.needs_redraw = false;
         app.mutex.unlock();
+
+        if (first_message) |msg| {
+            if (!trust_dialog.active) {
+                first_message = null;
+                ctx.input.appendSlice(alloc, msg) catch |err| {
+                    log.err("failed to set first message: {}", .{err});
+                };
+                ctx.cursor_pos = ctx.input.items.len;
+                _ = input_handler.handleEnter(&ctx) catch |err| {
+                    log.err("failed to submit first message: {}", .{err});
+                };
+            }
+        }
     }
 }
