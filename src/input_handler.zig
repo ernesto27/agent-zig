@@ -7,6 +7,7 @@ const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
+const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
 const ui = @import("ui.zig");
 const image_attach = @import("image_attach.zig");
@@ -27,6 +28,7 @@ pub const InputContext = struct {
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
     mcp_picker: *mcp_picker_mod.McpPicker,
+    skills_picker: *skills_picker_mod.SkillsPicker,
     trust_dialog: *trust_dialog_mod.TrustDialog,
     spinner_state: *ui.SpinnerState,
     auto_scroll: *bool,
@@ -82,6 +84,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.model_picker.active or
             ctx.provider_picker.active or
             ctx.mcp_picker.active or
+            ctx.skills_picker.active or
             ctx.app.sessions.active or
             ctx.app.sessions.rename_active;
         if (!modal_open) ctx.app.toggleMode();
@@ -99,6 +102,10 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         if (ctx.cursor_pos < ctx.input.items.len) ctx.cursor_pos += 1;
     } else if (key.codepoint == 127 or key.codepoint == 8) {
         try handleBackspace(ctx);
+    } else if (key.matches(' ', .{}) and ctx.skills_picker.active) {
+        try ctx.skills_picker.toggleSelected(ctx.alloc);
+        try ctx.command_picker.updateFromInput(ctx.alloc, ctx.input.items);
+        ctx.app.needs_redraw = true;
     } else if (key.text) |txt| {
         try handleTextInput(ctx, txt);
     } else if (((key.codepoint == '\r' or key.codepoint == '\n') and key.mods.shift) or
@@ -254,6 +261,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
         },
         .rename => ctx.app.sessions.openRename(),
         .mcp => try ctx.mcp_picker.open(ctx.alloc, &ctx.app.mcp_registry, ctx.app.mcp_config),
+        .skills => try ctx.skills_picker.open(ctx.alloc, &ctx.app.skill_registry),
         .sandbox => {
             if (ctx.app.loading.active) return .none;
             ctx.app.toggleSandbox(ctx.loop);
@@ -284,6 +292,8 @@ fn handleEscape(ctx: *InputContext) !void {
         ctx.provider_picker.reset();
     } else if (ctx.mcp_picker.active) {
         if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset();
+    } else if (ctx.skills_picker.active) {
+        ctx.skills_picker.reset();
     } else if (ctx.app.sessions.rename_active) {
         ctx.app.sessions.resetRename();
     } else if (ctx.app.sessions.active) {
@@ -313,6 +323,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                 if (ctx.provider_picker.selected > 0) ctx.provider_picker.selected -= 1;
             } else if (ctx.mcp_picker.active) {
                 ctx.mcp_picker.moveUp();
+            } else if (ctx.skills_picker.active) {
+                ctx.skills_picker.moveUp();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected > 0) {
                     ctx.app.sessions.selected -= 1;
@@ -354,6 +366,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                     ctx.provider_picker.selected += 1;
             } else if (ctx.mcp_picker.active) {
                 ctx.mcp_picker.moveDown();
+            } else if (ctx.skills_picker.active) {
+                ctx.skills_picker.moveDown();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected + 1 < ctx.app.sessions.entries.items.len) {
                     ctx.app.sessions.selected += 1;
@@ -396,6 +410,11 @@ fn handleBackspace(ctx: *InputContext) !void {
             _ = ctx.model_picker.query.orderedRemove(ctx.model_picker.query.items.len - 1);
             try ctx.model_picker.refresh(alloc);
         }
+    } else if (ctx.skills_picker.active) {
+        if (ctx.skills_picker.query.items.len > 0) {
+            _ = ctx.skills_picker.query.orderedRemove(ctx.skills_picker.query.items.len - 1);
+            try ctx.skills_picker.refresh(alloc);
+        }
     } else if (ctx.cursor_pos == 0 and ctx.app.pending_attachments.items.len > 0) {
         const removed = ctx.app.pending_attachments.pop();
         if (removed) |path| alloc.free(path);
@@ -427,6 +446,9 @@ fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
     } else if (ctx.model_picker.active) {
         try ctx.model_picker.query.appendSlice(alloc, txt);
         try ctx.model_picker.refresh(alloc);
+    } else if (ctx.skills_picker.active) {
+        try ctx.skills_picker.query.appendSlice(alloc, txt);
+        try ctx.skills_picker.refresh(alloc);
     } else if (txt.len > 0) {
         try ctx.input.insertSlice(alloc, ctx.cursor_pos, txt);
         ctx.cursor_pos += txt.len;
@@ -473,10 +495,19 @@ pub fn handleEnter(ctx: *InputContext) !bool {
                     cmd.name[command_picker_mod.SKILL_PREFIX.len..]
                 else
                     cmd.name;
-                if (ctx.app.skill_registry.find(bare_name) != null and !ctx.app.loading.active) {
-                    clearInput(ctx);
-                    try ctx.app.skillCMD(bare_name);
-                    result = .send;
+                if (ctx.app.skill_registry.find(bare_name)) |skill| {
+                    if (!ctx.app.loading.active) {
+                        if (!skill.enabled) {
+                            clearInput(ctx);
+                            const notice = try std.fmt.allocPrint(alloc, "Skill \"{s}\" is disabled", .{bare_name});
+                            defer alloc.free(notice);
+                            ctx.app.appendNotice(notice);
+                        } else {
+                            clearInput(ctx);
+                            try ctx.app.skillCMD(bare_name);
+                            result = .send;
+                        }
+                    }
                 }
             }
         }

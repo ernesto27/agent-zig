@@ -11,6 +11,7 @@ const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
+const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
 
 const log_mod = @import("log.zig");
@@ -87,6 +88,9 @@ pub fn main() !void {
     var mcp_picker = mcp_picker_mod.McpPicker.init();
     defer mcp_picker.deinit(alloc);
 
+    var skills_picker = skills_picker_mod.SkillsPicker.init();
+    defer skills_picker.deinit(alloc);
+
     var trust_cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const trust_cwd: ?[]const u8 = std.fs.realpath(".", &trust_cwd_buf) catch std.posix.getcwd(&trust_cwd_buf) catch null;
     var trust_dialog = trust_dialog_mod.TrustDialog.init();
@@ -159,6 +163,7 @@ pub fn main() !void {
         .model_picker = &model_picker,
         .provider_picker = &provider_picker,
         .mcp_picker = &mcp_picker,
+        .skills_picker = &skills_picker,
         .trust_dialog = &trust_dialog,
         .spinner_state = &spinner_state,
         .auto_scroll = &auto_scroll,
@@ -439,6 +444,10 @@ pub fn main() !void {
 
         if (mcp_picker.active) {
             mcp_picker.render(win, vx.screen.width, vx.screen.height);
+        }
+
+        if (skills_picker.active) {
+            skills_picker.render(win, vx.screen.width, vx.screen.height);
         }
 
         if (trust_dialog.active) {

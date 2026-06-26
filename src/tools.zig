@@ -509,9 +509,18 @@ fn grepTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) Too
     return exec.grep(allocator, pattern, path, include);
 }
 
+fn requireEnabledSkill(registry: *const skills.Registry, name: []const u8) ?ToolResult {
+    if (registry.find(name)) |skill| {
+        if (!skill.enabled) return .{ .content = "Skill is disabled", .is_error = true };
+    }
+    return null;
+}
+
 fn loadSkill(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
     const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
     const name = getStringField(input, "name") orelse return .{ .content = "Invalid input: expected { name: string }", .is_error = true };
+
+    if (requireEnabledSkill(registry, name)) |err| return err;
 
     const content = registry.readSkill(allocator, name) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error loading skill '{s}': {}", .{ name, err }) catch
@@ -526,6 +535,8 @@ fn loadSkillResource(allocator: std.mem.Allocator, ctx: Context, input: std.json
     const name = getStringField(input, "skill") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
     const path = getStringField(input, "path") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
 
+    if (requireEnabledSkill(registry, name)) |err| return err;
+
     const content = registry.readResource(allocator, name, path) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error loading skill resource '{s}/{s}': {}", .{ name, path, err }) catch
             return .{ .content = "Error loading skill resource", .is_error = true };
@@ -538,6 +549,8 @@ fn resolveSkillScript(allocator: std.mem.Allocator, ctx: Context, input: std.jso
     const registry = ctx.skill_registry orelse return .{ .content = "Skills are not available", .is_error = true };
     const name = getStringField(input, "skill") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
     const path = getStringField(input, "path") orelse return .{ .content = "Invalid input: expected { skill: string, path: string }", .is_error = true };
+
+    if (requireEnabledSkill(registry, name)) |err| return err;
 
     const resolved = registry.resolveScriptPath(allocator, name, path) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error resolving skill script '{s}/{s}': {}", .{ name, path, err }) catch

@@ -7,7 +7,7 @@ pub const SKILL_PREFIX = "skills:";
 const COUNTER_BUF_LEN = 32;
 const COUNTER_FG = vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } };
 
-pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, rename, sandbox, export_session, exit };
+pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, skills, rename, sandbox, export_session, exit };
 
 pub const Command = struct {
     name: []const u8,
@@ -24,6 +24,7 @@ pub const commands = [_]Command{
     .{ .name = "resume", .description = "Resume conversation", .action = .resume_session },
     .{ .name = "init", .description = "Create or update AGENTS.md", .action = .init },
     .{ .name = "mcp", .description = "List active MCP servers", .action = .mcp },
+    .{ .name = "skills", .description = "List skills and toggle enablement", .action = .skills },
     .{ .name = "rename", .description = "Rename current session", .action = .rename },
     .{ .name = "sandbox", .description = "Toggle Docker sandbox", .action = .sandbox },
     .{ .name = "export", .description = "Export conversation to HTML", .action = .export_session },
@@ -94,6 +95,7 @@ pub const CommandPicker = struct {
             const prefix_matches = self.query.items.len > 0 and
                 std.ascii.indexOfIgnoreCase(SKILL_PREFIX, self.query.items) != null;
             for (registry.skills.items) |skill| {
+                if (!skill.enabled) continue;
                 if (prefix_matches or matchesQuery(skill.name, self.query.items)) {
                     const skillName = try std.fmt.allocPrint(alloc, "{s}{s}", .{ SKILL_PREFIX, skill.name });
                     try self.results.append(alloc, .{

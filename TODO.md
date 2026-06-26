@@ -30,7 +30,7 @@
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
 [] - when run skill,  execute
-[] - export data to html
+[x] - export data to html
 [] - share session using gist
 [x] - rename session
 [x] - show nice date created in session
@@ -90,7 +90,7 @@ high impact:
 
 medium:
 [] - custom slash commands from markdown (.agent/commands/*.md with $ARGUMENTS), mirror skills loader
-[] - export / share session: render session jsonl to HTML or push to a GitHub gist
+[x] - export / share session: render session jsonl to HTML or push to a GitHub gist
 [] - auto re-read changed files: detect on-disk change after read and refresh context
 
 polish / harder:

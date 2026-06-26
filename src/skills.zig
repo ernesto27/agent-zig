@@ -13,6 +13,7 @@ pub const Skill = struct {
     license: ?[]const u8,
     metadata: ?[]const u8,
     dir_path: []const u8,
+    enabled: bool = true,
 
     fn deinit(self: *Skill, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -69,6 +70,7 @@ pub const Registry = struct {
 
         try out.appendSlice(allocator, "Available skills:\n\n");
         for (self.skills.items) |skill| {
+            if (!skill.enabled) continue;
             if (skill.license) |lic| {
             try out.writer(allocator).print("- `{s}`: {s} (license: {s})\n", .{ skill.name, skill.description, lic });
         } else {
