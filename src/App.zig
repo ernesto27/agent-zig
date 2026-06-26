@@ -6,6 +6,7 @@ const sessions = @import("sessions.zig");
 const messages_mod = @import("messages.zig");
 const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
+const export_mod = @import("commands/export.zig");
 const mode_mod = @import("mode.zig");
 const agent_loop = @import("agent_loop.zig");
 const image_attach = @import("image_attach.zig");
@@ -185,6 +186,12 @@ pub const App = struct {
         const prompt = init_mod.Init.getInitPrompt();
         const content = try self.alloc.dupe(u8, prompt);
         try self.messages.append(self.alloc, .{ .role = .user, .content = content });
+    }
+
+    pub fn exportCMD(self: *Self) !void {
+        const notice = try export_mod.Export.exportSession(self.alloc, self.messages.view());
+        defer self.alloc.free(notice);
+        self.appendNotice(notice);
     }
 
     fn buildCompactPrompt(self: *Self) ![]const u8 {

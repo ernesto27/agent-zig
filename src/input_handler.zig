@@ -259,6 +259,11 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             ctx.app.toggleSandbox(ctx.loop);
             return .none;
         },
+        .export_session => {
+            if (ctx.app.loading.active) return .none;
+            try ctx.app.exportCMD();
+            return .none;
+        },
         .exit => return .quit,
     }
     return .none;
