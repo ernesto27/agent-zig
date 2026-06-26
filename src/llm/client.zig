@@ -21,6 +21,52 @@ pub const Config = struct {
 
 pub const CancelFn = *const fn (*anyopaque) bool;
 
+pub const RequestError = error{
+    ProviderAuthenticationFailed,
+    ProviderHttpRequestFailed,
+};
+
+/// Map a non-200 provider HTTP status to a typed request error. 401/403 are
+/// treated as authentication failures; everything else is a generic provider
+/// request failure.
+pub fn statusToError(status: std.http.Status) RequestError {
+    return switch (status) {
+        .unauthorized, .forbidden => error.ProviderAuthenticationFailed,
+        else => error.ProviderHttpRequestFailed,
+    };
+}
+
+/// Read up to `buffer.len` bytes of a provider error body after the response
+/// headers. Uses `readSliceShort`, which stops at the first end-of-stream and
+/// never re-enters the std HTTP reader once it transitions to `.ready` — the
+/// re-entry that panics the delimiter-based loop. A read failure is non-fatal:
+/// it logs and yields an empty snippet so non-200 handling never depends on the
+/// body being readable.
+pub fn readErrorBodySnippet(response_reader: *std.Io.Reader, buffer: []u8) []const u8 {
+    const n = response_reader.readSliceShort(buffer) catch |err| {
+        log.warn("could not read provider error body: {}", .{err});
+        return buffer[0..0];
+    };
+    return buffer[0..n];
+}
+
+/// Build a user-facing message for a request error. Never includes the API key.
+/// Caller owns the returned slice.
+pub fn requestErrorMessage(allocator: std.mem.Allocator, err: anyerror, provider_name: []const u8) ![]u8 {
+    return switch (err) {
+        error.ProviderAuthenticationFailed => std.fmt.allocPrint(
+            allocator,
+            "Provider authentication failed. Check the API key for {s} with /provider.",
+            .{provider_name},
+        ),
+        error.ProviderHttpRequestFailed => allocator.dupe(
+            u8,
+            "Provider request failed. Check ~/.config/agent-zig/agent.log for details.",
+        ),
+        else => allocator.dupe(u8, "Service is not working, try later"),
+    };
+}
+
 pub const Backend = enum { anthropic, openai, gemini };
 
 fn backendFor(name: []const u8) Backend {

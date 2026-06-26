@@ -477,12 +477,13 @@ pub const App = struct {
         }
     }
 
-    pub fn onRequestError(self: *Self, _: anyerror) void {
+    pub fn onRequestError(self: *Self, err: anyerror) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.messages.last()) |last| {
+            const msg = agent.llm.client.requestErrorMessage(self.alloc, err, self.llm_client.config.provider_name) catch return;
             self.alloc.free(last.content);
-            last.content = self.alloc.dupe(u8, "Service is not working, try later") catch "";
+            last.content = msg;
             last.is_error = true;
         }
     }

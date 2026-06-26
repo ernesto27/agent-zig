@@ -282,18 +282,12 @@ pub fn sendMessageStreaming(
     log.info("OpenAI: response status: {d}", .{@intFromEnum(response.head.status)});
 
     if (response.head.status != .ok) {
-        var err_buf: [4096]u8 = undefined;
         var err_transfer_buf: [4096]u8 = undefined;
+        var err_snippet_buf: [4096]u8 = undefined;
         const err_reader = response.reader(&err_transfer_buf);
-        var err_pos: usize = 0;
-        while (err_reader.takeDelimiter('\n') catch null) |line| {
-            if (err_pos + line.len < err_buf.len) {
-                @memcpy(err_buf[err_pos..][0..line.len], line);
-                err_pos += line.len;
-            } else break;
-        }
-        log.err("OpenAI request failed {d}: {s}", .{ @intFromEnum(response.head.status), err_buf[0..err_pos] });
-        return error.HttpRequestFailed;
+        const snippet = client.readErrorBodySnippet(err_reader, &err_snippet_buf);
+        log.err("OpenAI request failed {d}: {s}", .{ @intFromEnum(response.head.status), snippet });
+        return client.statusToError(response.head.status);
     }
 
     var transfer_buf: [16 * 1024]u8 = undefined;
