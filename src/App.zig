@@ -77,7 +77,7 @@ pub const App = struct {
     // so reads (e.g. dockerImage, settings) reflect runtime mutations.
     config_store: *agent.config.ConfigStore,
     pending_attachments: std.ArrayList([]u8),
-    skill_registry: agent.skills.Registry = .{},
+    skill_registry: agent.skills.Registry,
     mcp_registry: agent.mcp.registry.McpRegistry,
     // Borrowed view of config.mcpServers — its arena outlives App (owned by
     // main.zig's parsed_config). Used by /mcp to show "configured" vs "live".
@@ -113,7 +113,7 @@ pub const App = struct {
     const Self = @This();
     const log = std.log.scoped(.app);
 
-    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client, config: *agent.config.ConfigStore) Self {
+    pub fn init(alloc: std.mem.Allocator, client: *agent.llm.Client, config: *agent.config.ConfigStore) !Self {
         var sp = agent.system_prompt.SystemPrompt{};
         sp.readContent(alloc) catch |err| {
             log.err("failed to load system prompt: {}", .{err});
@@ -122,7 +122,7 @@ pub const App = struct {
         sess.init(alloc, config) catch |err| {
             log.err("failed to init sessions: {}", .{err});
         };
-        var skill_registry = agent.skills.Registry.init();
+        var skill_registry = try agent.skills.Registry.init(alloc);
         skill_registry.load(alloc) catch |err| {
             log.err("failed to load skills: {}", .{err});
         };

@@ -121,7 +121,7 @@ pub fn main() !void {
     var llm_client = agent.llm.Client.init(alloc, llm_client_cfg);
     defer llm_client.deinit();
 
-    var app = App.init(alloc, &llm_client, &config_store);
+    var app = try App.init(alloc, &llm_client, &config_store);
     defer app.deinit();
     app.loadMcpServers(config_store.cfg.mcpServers);
 

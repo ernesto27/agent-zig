@@ -26,14 +26,19 @@ pub const Skill = struct {
 
 pub const Registry = struct {
     skills: std.ArrayList(Skill) = .{},
+    home: []const u8,
+    skills_home_path: []u8,
 
-    pub fn init() Registry {
-        return .{};
+    pub fn init(allocator: std.mem.Allocator) !Registry {
+        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        const path = try std.fs.path.join(allocator, &.{ home, skills_root });
+        return .{ .home = home, .skills_home_path = path };
     }
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
         for (self.skills.items) |*skill| skill.deinit(allocator);
         self.skills.deinit(allocator);
+        allocator.free(self.skills_home_path);
     }
 
     pub fn load(self: *Registry, allocator: std.mem.Allocator) !void {
@@ -43,11 +48,32 @@ pub const Registry = struct {
         };
         defer dir.close();
 
+        var map = std.StringHashMap(bool).init(allocator);
+        defer {
+            var kit = map.keyIterator();
+            while (kit.next()) |k| allocator.free(k.*);
+            map.deinit();
+        }
+
         var iter = dir.iterate();
         while (try iter.next()) |entry| {
             if (entry.kind != .directory) continue;
-            self.loadOne(allocator, entry.name) catch |err| {
-                log.warn("skipping skill '{s}': {}", .{ entry.name, err });
+            const gop = try map.getOrPut(entry.name);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, entry.name);
+                gop.value_ptr.* = false;
+            }
+        }
+
+        try self.loadHomeSkills(&map);
+
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            const name_skill = entry.key_ptr.*;
+            const is_home = entry.value_ptr.*;
+
+            self.loadOne(allocator, name_skill, is_home) catch |err| {
+                log.warn("skipping skill '{s}': {}", .{ name_skill, err });
                 continue;
             };
         }
@@ -72,10 +98,10 @@ pub const Registry = struct {
         for (self.skills.items) |skill| {
             if (!skill.enabled) continue;
             if (skill.license) |lic| {
-            try out.writer(allocator).print("- `{s}`: {s} (license: {s})\n", .{ skill.name, skill.description, lic });
-        } else {
-            try out.writer(allocator).print("- `{s}`: {s}\n", .{ skill.name, skill.description });
-        }
+                try out.writer(allocator).print("- `{s}`: {s} (license: {s})\n", .{ skill.name, skill.description, lic });
+            } else {
+                try out.writer(allocator).print("- `{s}`: {s}\n", .{ skill.name, skill.description });
+            }
         }
 
         return out.toOwnedSlice(allocator);
@@ -111,10 +137,11 @@ pub const Registry = struct {
         return std.fs.path.join(allocator, &.{ skill.dir_path, normalized });
     }
 
-    fn loadOne(self: *Registry, allocator: std.mem.Allocator, dir_name: []const u8) !void {
+    fn loadOne(self: *Registry, allocator: std.mem.Allocator, dir_name: []const u8, is_home: bool) !void {
         if (!isValidName(dir_name)) return error.InvalidSkillName;
 
-        const dir_path = try std.fs.path.join(allocator, &.{ skills_root, dir_name });
+        const base = if (is_home) self.skills_home_path else skills_root;
+        const dir_path = try std.fs.path.join(allocator, &.{ base, dir_name });
         errdefer allocator.free(dir_path);
 
         const skill_path = try std.fs.path.join(allocator, &.{ dir_path, skill_file_name });
@@ -145,6 +172,24 @@ pub const Registry = struct {
             .metadata = parsed.metadata,
             .dir_path = dir_path,
         });
+    }
+
+    fn loadHomeSkills(self: *Registry, map: *std.StringHashMap(bool)) !void {
+        var dirHome = std.fs.openDirAbsolute(self.skills_home_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return,
+            else => return err,
+        };
+        defer dirHome.close();
+
+        var iterHome = dirHome.iterate();
+        while (try iterHome.next()) |entry| {
+            if (entry.kind != .directory) continue;
+            const gop = try map.getOrPut(entry.name);
+            if (gop.found_existing) continue;
+            log.info("skills home path not in current: {s}", .{entry.name});
+            gop.key_ptr.* = try map.allocator.dupe(u8, entry.name);
+            gop.value_ptr.* = true;
+        }
     }
 };
 

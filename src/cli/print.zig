@@ -93,7 +93,7 @@ pub fn run(allocator: std.mem.Allocator, prompt: []const u8) !void {
     sp.readContent(allocator) catch |err| log.err("failed to load system prompt: {}", .{err});
     defer sp.deinit(allocator);
 
-    var skill_registry = agent.skills.Registry.init();
+    var skill_registry = try agent.skills.Registry.init(allocator);
     skill_registry.load(allocator) catch |err| log.err("failed to load skills: {}", .{err});
     defer skill_registry.deinit(allocator);
 
