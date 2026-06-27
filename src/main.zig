@@ -240,8 +240,6 @@ pub fn main() !void {
                     app.mutex.lock();
                     const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
                     const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
-                    const rendered_lines = chat_selection.buildRenderedLines(&app, mouse_arena.allocator(), if (vx.screen.width > 0) vx.screen.width else 1, vx.screen.width_method) catch &.{};
-                    app.mutex.unlock();
 
                     const chat_win = vx.window().child(.{
                         .x_off = 0,
@@ -250,6 +248,9 @@ pub fn main() !void {
                         .height = layout.chat_h_total,
                         .border = .{ .where = .all, .glyphs = .single_rounded },
                     });
+
+                    const rendered_lines = chat_selection.renderedLinesCached(&app, chat_win.width, vx.screen.width_method) catch &.{};
+                    app.mutex.unlock();
 
                     const input_win = vx.window().child(.{
                         .x_off = 0,
@@ -385,7 +386,7 @@ pub fn main() !void {
         });
 
         const chat_h = chat_win.height;
-        const rendered_lines = chat_selection.buildRenderedLines(&app, frame_arena.allocator(), chat_win.width, vx.screen.width_method) catch &.{};
+        const rendered_lines = chat_selection.renderedLinesCached(&app, chat_win.width, vx.screen.width_method) catch &.{};
         const total_lines = rendered_lines.len;
 
         // Clamp scroll_offset and handle auto-scroll

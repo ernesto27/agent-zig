@@ -6,6 +6,16 @@ const App = @import("App.zig").App;
 const Allocator = std.mem.Allocator;
 const WidthMethod = vaxis.gwidth.Method;
 
+pub const ChatRenderCache = struct {
+    arena: std.heap.ArenaAllocator,
+    lines: ?[]RenderedLine = null,
+    width: u16 = 0,
+    width_method: WidthMethod = undefined,
+    show_thinking: bool = false,
+    signature: u64 = 0,
+    valid: bool = false,
+};
+
 pub const PlainRenderedLine = struct {
     text: []const u8,
     prefix: []const u8,
@@ -203,6 +213,46 @@ fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_line
     }
 
     return lines;
+}
+
+pub fn renderedLinesCached(app: *App, chat_width: u16, width_method: WidthMethod) ![]RenderedLine {
+    const cache = &app.chat_render_cache;
+    const sig = chatSignature(app);
+    const show_thinking = app.config_store.cfg.settings.showThinkingBlock;
+
+    if (cache.valid and cache.lines != null and
+        cache.width == chat_width and
+        cache.width_method == width_method and
+        cache.show_thinking == show_thinking and
+        cache.signature == sig)
+    {
+        return cache.lines.?;
+    }
+
+    _ = cache.arena.reset(.retain_capacity);
+    const lines = try buildRenderedLines(app, cache.arena.allocator(), chat_width, width_method);
+    cache.lines = lines;
+    cache.width = chat_width;
+    cache.width_method = width_method;
+    cache.show_thinking = show_thinking;
+    cache.signature = sig;
+    cache.valid = true;
+    return lines;
+}
+
+fn chatSignature(app: *App) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    const message_count = app.messages.count();
+    hasher.update(std.mem.asBytes(&message_count));
+    for (app.messages.view()) |*msg| {
+        const role = @intFromEnum(msg.role);
+        const content_len = msg.content.len;
+        const thinking_len: usize = if (msg.thinking) |t| t.len else 0;
+        hasher.update(std.mem.asBytes(&role));
+        hasher.update(std.mem.asBytes(&content_len));
+        hasher.update(std.mem.asBytes(&thinking_len));
+    }
+    return hasher.final();
 }
 
 pub fn buildRenderedLines(

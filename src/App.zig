@@ -11,6 +11,7 @@ const mode_mod = @import("mode.zig");
 const agent_loop = @import("agent_loop.zig");
 const image_attach = @import("image_attach.zig");
 const LoadingState = @import("loading_state.zig").LoadingState;
+const chat_selection = @import("chat_selection.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -71,6 +72,7 @@ pub const App = struct {
     preview_scroll: usize = 0,
     alloc: std.mem.Allocator,
     messages: messages_mod.Messages,
+    chat_render_cache: chat_selection.ChatRenderCache,
     message_queue: agent.message_queue.MessageQueue = .{},
     llm_client: *agent.llm.Client,
     // Borrowed; owned by main(). Live handle to persisted config + settings,
@@ -137,6 +139,7 @@ pub const App = struct {
         return .{
             .alloc = alloc,
             .messages = .{},
+            .chat_render_cache = .{ .arena = std.heap.ArenaAllocator.init(alloc) },
             .llm_client = client,
             .pending_attachments = .{},
             .skill_registry = skill_registry,
@@ -339,6 +342,7 @@ pub const App = struct {
         // it touches (self.sandbox, self.messages, self.alloc).
         if (self.sandbox_thread) |t| t.join();
         self.sandbox.stop(self.alloc);
+        self.chat_render_cache.arena.deinit();
         self.messages.deinit(self.alloc);
         self.message_queue.deinit(self.alloc);
         self.clearPendingAttachments();
