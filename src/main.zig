@@ -13,6 +13,7 @@ const provider_picker_mod = @import("provider_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
 const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
+const code_modal = @import("code_modal.zig");
 
 const log_mod = @import("log.zig");
 const input_handler = @import("input_handler.zig");
@@ -367,7 +368,10 @@ pub fn main() !void {
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
         const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
 
-        if (!app.tool_confirmation.pending and app.pending_attachments.items.len > 0 and layout.preview_h > 0) {
+        if (code_modal.isCodeConfirmation(&app)) {
+            const max_modal_scroll = code_modal.maxScroll(vx.screen.width, vx.screen.height, &app);
+            if (app.preview_scroll > max_modal_scroll) app.preview_scroll = max_modal_scroll;
+        } else if (!app.tool_confirmation.pending and app.pending_attachments.items.len > 0 and layout.preview_h > 0) {
             const inner_preview_h: usize = if (layout.preview_h > 2) layout.preview_h - 2 else 0;
             const preview_rows = attach_preview.totalContentRows(app.pending_attachments.items, vx.caps.kitty_graphics);
             const max_preview_scroll = if (preview_rows > inner_preview_h) preview_rows - inner_preview_h else 0;
@@ -467,27 +471,29 @@ pub fn main() !void {
         if (app.loading.active) ui.renderShowLoading(win, &app, layout.loading_y);
         if (!app.tool_confirmation.pending) app.message_queue.render(win, layout.queue_y, layout.queue_h);
 
-        const input_win = win.child(.{
-            .x_off = 0,
-            .y_off = layout.input_y,
-            .width = vx.screen.width,
-            .height = input_layout.view.box_h,
-            .border = .{ .where = .all, .glyphs = .single_rounded },
-        });
+        if (!code_modal.isCodeConfirmation(&app)) {
+            const input_win = win.child(.{
+                .x_off = 0,
+                .y_off = layout.input_y,
+                .width = vx.screen.width,
+                .height = input_layout.view.box_h,
+                .border = .{ .where = .all, .glyphs = .single_rounded },
+            });
 
-        if (app.tool_confirmation.pending) {
-            var confirm_buf: [256]u8 = undefined;
-            const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
-            const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm   Esc cancel", .{
-                action,
-                app.tool_confirmation.file_path,
-            }) catch " ↑↓ select  Enter confirm  Esc cancel";
-            _ = input_win.printSegment(.{
-                .text = confirm_text,
-                .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
-            }, .{ .row_offset = 0, .col_offset = 1 });
-        } else {
-            ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view, &app, ui.inputSelectionBounds(input_selection, input_layout.view));
+            if (app.tool_confirmation.pending) {
+                var confirm_buf: [256]u8 = undefined;
+                const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
+                const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm   Esc cancel", .{
+                    action,
+                    app.tool_confirmation.file_path,
+                }) catch " ↑↓ select  Enter confirm  Esc cancel";
+                _ = input_win.printSegment(.{
+                    .text = confirm_text,
+                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+                }, .{ .row_offset = 0, .col_offset = 1 });
+            } else {
+                ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view, &app, ui.inputSelectionBounds(input_selection, input_layout.view));
+            }
         }
 
         // Status
@@ -503,6 +509,10 @@ pub fn main() !void {
             clipboard_status,
             show_exit,
         );
+
+        if (code_modal.isCodeConfirmation(&app)) {
+            code_modal.render(frame_arena.allocator(), win, vx.screen.width, vx.screen.height, &app, app.preview_scroll);
+        }
 
         try vx.render(tty.writer());
         app.needs_redraw = false;

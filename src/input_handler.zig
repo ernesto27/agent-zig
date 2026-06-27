@@ -11,6 +11,7 @@ const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
 const ui = @import("ui.zig");
 const image_attach = @import("image_attach.zig");
+const code_modal = @import("code_modal.zig");
 
 const log = std.log.scoped(.input_handler);
 
@@ -100,6 +101,10 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
         if (ctx.cursor_pos > 0) ctx.cursor_pos -= 1;
     } else if (key.matches(vaxis.Key.right, .{})) {
         if (ctx.cursor_pos < ctx.input.items.len) ctx.cursor_pos += 1;
+    } else if (key.matches(vaxis.Key.page_up, .{})) {
+        if (code_modal.isCodeConfirmation(ctx.app)) ctx.app.preview_scroll -|= 5;
+    } else if (key.matches(vaxis.Key.page_down, .{})) {
+        if (code_modal.isCodeConfirmation(ctx.app)) ctx.app.preview_scroll += 5;
     } else if (key.codepoint == 127 or key.codepoint == 8) {
         try handleBackspace(ctx);
     } else if (key.matches(' ', .{}) and ctx.skills_picker.active) {

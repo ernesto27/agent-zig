@@ -5,6 +5,7 @@ const App = @import("App.zig").App;
 const image_attach = @import("image_attach.zig");
 const attach_preview = @import("attach_preview.zig");
 const chat_selection = @import("chat_selection.zig");
+const code_modal = @import("code_modal.zig");
 
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
@@ -669,6 +670,8 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
 
     if (!(app.tool_confirmation.pending or show_grep_panel or show_glob_panel or show_web_panel)) return;
 
+    if (code_modal.isCodeConfirmation(app)) return;
+
     const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
     const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
     const is_mcp = std.mem.startsWith(u8, app.tool_confirmation.tool_name, "mcp__");
@@ -745,21 +748,6 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
             .text = " Do you want to proceed?",
             .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
         }, .{ .row_offset = 2, .col_offset = 1 });
-    } else if (is_write) {
-        var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
-        var line_idx: usize = 0;
-        var prow: u16 = 1;
-        while (line_iter.next()) |line| {
-            if (prow >= preview_content_end) break;
-            if (line_idx >= preview_scroll) {
-                _ = preview_win.printSegment(.{
-                    .text = line,
-                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
-                }, .{ .row_offset = prow, .col_offset = 1 });
-                prow += 1;
-            }
-            line_idx += 1;
-        }
     } else if (is_mcp) {
         var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
         var line_idx: usize = 0;
@@ -770,35 +758,6 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
                 _ = preview_win.printSegment(.{
                     .text = line,
                     .style = .{ .fg = .{ .rgb = .{ 0xA0, 0xD0, 0xFF } } },
-                }, .{ .row_offset = prow, .col_offset = 1 });
-                prow += 1;
-            }
-            line_idx += 1;
-        }
-    } else {
-        var prow: u16 = 1;
-        var line_idx: usize = 0;
-        var old_iter = std.mem.splitScalar(u8, app.tool_confirmation.old_string, '\n');
-        while (old_iter.next()) |line| {
-            if (prow >= preview_content_end) break;
-            if (line_idx >= preview_scroll) {
-                const diff_line = std.fmt.allocPrint(alloc, "- {s}", .{line}) catch line;
-                _ = preview_win.printSegment(.{
-                    .text = diff_line,
-                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0x60, 0x60 } } },
-                }, .{ .row_offset = prow, .col_offset = 1 });
-                prow += 1;
-            }
-            line_idx += 1;
-        }
-        var new_iter = std.mem.splitScalar(u8, app.tool_confirmation.new_string, '\n');
-        while (new_iter.next()) |line| {
-            if (prow >= preview_content_end) break;
-            if (line_idx >= preview_scroll) {
-                const diff_line = std.fmt.allocPrint(alloc, "+ {s}", .{line}) catch line;
-                _ = preview_win.printSegment(.{
-                    .text = diff_line,
-                    .style = .{ .fg = .{ .rgb = .{ 0x60, 0xFF, 0x60 } } },
                 }, .{ .row_offset = prow, .col_offset = 1 });
                 prow += 1;
             }
