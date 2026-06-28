@@ -9,10 +9,10 @@
 [x] - show image in TUI (PNG preview via Kitty protocol) 
 [x] - show image preview for non-PNG formats (jpg, webp, etc.)
 [x] - render attached text files preview in panel
-[] - when ctrl-c or quit,  show option to resume latess conver
+[x] - when ctrl-c or quit,  show option to resume latess conver
 [] - when swhat 
-[] - improve copy text, now is slow
-[] - prevent crash invalid key in config.json
+[x] - improve copy text, now is slow
+[x] - prevent crash invalid key in config.json
 [] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
 [] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)
