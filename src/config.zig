@@ -267,6 +267,15 @@ pub const ConfigStore = struct {
         self.cfg.sessions = sessions;
     }
 
+    /// Find a persisted session by its full `.file` ("...-808a3d09.jsonl").
+    /// Returns the stored filename (borrowed from the config) or null.
+    pub fn sessionByFile(self: *const ConfigStore, file: []const u8) ?[]const u8 {
+        for (self.cfg.sessions) |s| {
+            if (std.mem.eql(u8, s.file, file)) return s.file;
+        }
+        return null;
+    }
+
     /// The persisted thinking effort for a provider, parsed back from its
     /// stored `thinkEffort` string. Falls back to .none if unset/unrecognized.
     pub fn thinkEffort(self: *ConfigStore, provider_name: []const u8) Effort {

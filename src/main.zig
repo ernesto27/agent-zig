@@ -28,6 +28,14 @@ const app_version = agent.build.version;
 
 const log = std.log.scoped(.main);
 
+const Command = enum { print, session };
+
+fn parseCommand(cmd: []const u8) ?Command {
+    if (std.mem.eql(u8, cmd, "-p") or std.mem.eql(u8, cmd, "--print")) return .print;
+    if (std.mem.eql(u8, cmd, "-s") or std.mem.eql(u8, cmd, "--session")) return .session;
+    return null;
+}
+
 fn versionCheckThread(app: *App, loop: *EventLoop) void {
     const v = update.checkNewVersion(app.alloc) catch null;
     if (v) |ver| {
@@ -44,7 +52,9 @@ pub const std_options: std.Options = .{
 };
 
 pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    vaxis.recover();
     log_mod.Logger.writeCrashReport(msg, trace, ret_addr);
+    std.debug.print("💥 agent crashed: {s}\nSee ~/.config/agent-zig/crash.log\n", .{msg});
     std.process.exit(1);
 }
 
@@ -57,18 +67,22 @@ pub fn main() !void {
     defer std.process.argsFree(alloc, args);
 
     var first_message: ?[]const u8 = null;
+    var session_name: ?[]const u8 = null;
     if (args.len > 1) {
         const cmd = args[1];
+        const arg = if (args.len > 2) args[2] else "";
 
-        if (std.mem.eql(u8, cmd, "-p") or std.mem.eql(u8, cmd, "--print")) {
-            const prompt = if (args.len > 2) args[2] else "";
-            print.run(alloc, prompt) catch std.process.exit(1);
+        if (parseCommand(cmd)) |command| switch (command) {
+            .print => {
+                print.run(alloc, arg) catch std.process.exit(1);
+                return;
+            },
+            .session => session_name = arg,
+        } else if (cli.dispatch(alloc, cmd)) {
             return;
+        } else {
+            first_message = cmd;
         }
-
-        if (cli.dispatch(alloc, cmd)) return;
-
-        first_message = cmd;
     }
 
     try log_mod.Logger.init(alloc);
@@ -126,12 +140,29 @@ pub fn main() !void {
     defer app.deinit();
     app.loadMcpServers(config_store.cfg.mcpServers);
 
+    if (session_name) |name| {
+        if (config_store.sessionByFile(name)) |filename| {
+            app.resumeSession(alloc, filename);
+        } else {
+            std.debug.print("No session named '{s}'\n", .{name});
+            return;
+        }
+    }
+
     var command_picker = command_picker_mod.CommandPicker.init(&app.skill_registry);
     defer command_picker.deinit(alloc);
 
     var tty_buf: [4096]u8 = undefined;
     var tty = try vaxis.Tty.init(&tty_buf);
     defer tty.deinit();
+    // Runs LIFO between vx.deinit (restores the main screen) and tty.deinit
+    // (closes the fd), so the message survives on the restored terminal.
+    defer {
+        if (app.sessions.current_filename) |name| {
+            _ = tty.writer().print("Resume this session: agent-zig --session {s}\r\n", .{name}) catch {};
+            tty.writer().flush() catch {};
+        }
+    }
 
     var vx = try vaxis.init(alloc, .{});
     defer vx.deinit(alloc, tty.writer());
@@ -144,7 +175,6 @@ pub fn main() !void {
     defer loop.stop();
 
     try vx.enterAltScreen(tty.writer());
-    defer vx.exitAltScreen(tty.writer()) catch {};
     try vx.queryTerminal(tty.writer(), 1 * std.time.ns_per_s);
     try vx.setMouseMode(tty.writer(), true);
     try vx.setBracketedPaste(tty.writer(), true);
@@ -204,7 +234,10 @@ pub fn main() !void {
                     // Skip redraw during paste — one redraw at paste_end is enough
                     continue;
                 }
-                if (try input_handler.handleKey(&ctx, key)) running = false;
+                if (try input_handler.handleKey(&ctx, key)) {
+                    log.info("user requested exit, shutting down", .{});
+                    running = false;
+                }
                 input_selection.clear();
                 app.needs_redraw = true;
             },
