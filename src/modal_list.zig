@@ -87,7 +87,9 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         return;
     }
 
-    const last_row: u16 = modal_h -| 1;
+    // `modal` is the inner window vaxis returns after insetting the border, so its
+    // usable height is `modal_h - 2`; rows >= this are clipped by writeCell.
+    const last_row: u16 = modal_h -| 2;
     const inner_w: u16 = modal_w -| 2;
 
     var primary_max: usize = 0;
@@ -99,11 +101,18 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         primary_max + 4,
     ));
 
+    const visible_rows: usize = last_row -| items_row;
+    var first: usize = 0;
+    if (visible_rows > 0 and opts.selected >= visible_rows) {
+        first = opts.selected - visible_rows + 1;
+    }
+
     const bg: vaxis.Color = .default;
-    for (opts.items, 0..) |it, idx| {
-        const row: u16 = items_row + @as(u16, @intCast(idx));
+    for (opts.items[first..], 0..) |it, vis_idx| {
+        const row: u16 = items_row + @as(u16, @intCast(vis_idx));
         if (row >= last_row) break;
 
+        const idx = first + vis_idx;
         const is_sel = idx == opts.selected;
         const fg = if (is_sel) fg_selected else fg_default;
         const fg_secondary = if (is_sel) fg_muted_on_sel else fg_muted;

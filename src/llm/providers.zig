@@ -54,6 +54,21 @@ pub const providers = [_]Provider{
             .{ .id = "gemini-2.5-flash-lite", .display = "Gemini 2.5 Flash Lite", .max_context = 1_048_576 },
         },
     },
+    .{
+        .name = "OpenRouter",
+        .models = &[_]Model{
+            .{ .id = "deepseek/deepseek-v4-flash", .display = "OR: DeepSeek V4 Flash", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "xiaomi/mimo-v2.5", .display = "OR: Xiaomi MiMo-V2.5", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "minimax/minimax-m3", .display = "OR: MiniMax M3", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "openrouter/owl-alpha", .display = "OR: Owl Alpha (free)", .free = true, .max_context = 1_048_756 },
+            .{ .id = "anthropic/claude-opus-4.7", .display = "OR: Claude Opus 4.7", .supports_thinking = true, .max_context = 1_000_000 },
+            .{ .id = "z-ai/glm-5.2", .display = "OR: GLM 5.2", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "deepseek/deepseek-v4-pro", .display = "OR: DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_048_576 },
+            .{ .id = "anthropic/claude-opus-4.8", .display = "OR: Claude Opus 4.8", .supports_thinking = true, .max_context = 1_000_000 },
+            .{ .id = "openai/gpt-5.5", .display = "OR: GPT-5.5", .supports_thinking = true, .max_context = 1_050_000 },
+            .{ .id = "google/gemini-2.5-pro", .display = "OR: Gemini 2.5 Pro", .supports_thinking = true, .max_context = 1_048_576 },
+        },
+    },
 };
 
 pub fn findModel(id: []const u8) ?FindResult {

@@ -2,11 +2,25 @@ const std = @import("std");
 const json_helpers = @import("../json_helpers.zig");
 const message = @import("message.zig");
 const client = @import("client.zig");
+const config_mod = @import("../config.zig");
 
 const log = std.log.scoped(.llm);
 
 const appendJsonString = json_helpers.appendJsonString;
 const appendObjectFieldName = json_helpers.appendObjectFieldName;
+
+/// OpenRouter reasoning effort string, or null when reasoning must not be sent.
+/// Gated to OpenRouter so plain OpenAI requests are unchanged. `max` clamps to
+/// `high` (OpenRouter's unified reasoning API accepts low/medium/high).
+fn reasoningEffort(provider_name: []const u8, effort: config_mod.Effort) ?[]const u8 {
+    if (!std.mem.eql(u8, provider_name, "OpenRouter")) return null;
+    return switch (effort) {
+        .none => null,
+        .low => "low",
+        .medium => "medium",
+        .high, .max => "high",
+    };
+}
 
 /// Serialize messages and tools to an OpenAI Chat Completions request JSON body.
 pub fn buildRequestBody(
@@ -16,6 +30,7 @@ pub fn buildRequestBody(
     tools: []const message.ToolDefinition,
     system_prompt: ?[]const u8,
     stream: bool,
+    reasoning_effort: ?[]const u8,
 ) ![]u8 {
     var out = std.ArrayList(u8){};
     errdefer out.deinit(allocator);
@@ -30,6 +45,14 @@ pub fn buildRequestBody(
         try out.append(allocator, ',');
         try appendObjectFieldName(allocator, &out, "stream_options");
         try out.appendSlice(allocator, "{\"include_usage\":true}");
+    }
+    if (reasoning_effort) |eff| {
+        try out.append(allocator, ',');
+        try appendObjectFieldName(allocator, &out, "reasoning");
+        try out.appendSlice(allocator, "{");
+        try appendObjectFieldName(allocator, &out, "effort");
+        try appendJsonString(allocator, &out, eff);
+        try out.appendSlice(allocator, "}");
     }
 
     if (tools.len > 0) {
@@ -243,8 +266,8 @@ pub fn sendMessageStreaming(
     on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
     should_cancel: client.CancelFn,
 ) !std.json.Parsed(message.MessagesResponse) {
-    _ = on_thinking_chunk; // OpenAI streaming does not emit separate thinking deltas
-    const body = try buildRequestBody(allocator, self.config.model, messages, tools, system_prompt, true);
+    const reasoning_eff = reasoningEffort(self.config.provider_name, self.config.effort);
+    const body = try buildRequestBody(allocator, self.config.model, messages, tools, system_prompt, true, reasoning_eff);
     defer allocator.free(body);
 
     const pretty_req = client.prettyJson(allocator, body) catch body;
@@ -295,7 +318,7 @@ pub fn sendMessageStreaming(
     var oai_stream = OpenAIStreamAccumulator.init(allocator);
     defer oai_stream.deinit();
 
-    try parseSseStream(allocator, body_reader, &oai_stream, ctx, on_chunk, should_cancel);
+    try parseSseStream(allocator, body_reader, &oai_stream, ctx, on_chunk, on_thinking_chunk, should_cancel);
 
     const response_bytes = try buildStreamedResponseJson(allocator, &oai_stream, self.config.model);
     defer allocator.free(response_bytes);
@@ -329,6 +352,7 @@ const OpenAIStreamAccumulator = struct {
     allocator: std.mem.Allocator,
     id: std.ArrayList(u8) = .{},
     text: std.ArrayList(u8) = .{},
+    thinking: std.ArrayList(u8) = .{},
     tool_calls: std.ArrayList(OpenAIToolCall) = .{},
     stop_reason: std.ArrayList(u8) = .{},
     input_tokens: u64 = 0,
@@ -341,6 +365,7 @@ const OpenAIStreamAccumulator = struct {
     fn deinit(self: *OpenAIStreamAccumulator) void {
         self.id.deinit(self.allocator);
         self.text.deinit(self.allocator);
+        self.thinking.deinit(self.allocator);
         for (self.tool_calls.items) |*tc| tc.deinit(self.allocator);
         self.tool_calls.deinit(self.allocator);
         self.stop_reason.deinit(self.allocator);
@@ -360,6 +385,7 @@ fn parseSseStream(
     stream: *OpenAIStreamAccumulator,
     ctx: *anyopaque,
     on_chunk: *const fn (*anyopaque, []const u8) void,
+    on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
     should_cancel: client.CancelFn,
 ) !void {
     while (true) {
@@ -430,6 +456,14 @@ fn parseSseStream(
             }
         }
 
+        // Reasoning content (OpenRouter)
+        if (json_helpers.getStringField(delta, "reasoning")) |think| {
+            if (think.len > 0) {
+                try stream.thinking.appendSlice(allocator, think);
+                on_thinking_chunk(ctx, think);
+            }
+        }
+
         // Tool calls
         if (json_helpers.getField(delta, "tool_calls")) |tc_val| {
             if (tc_val != .array) continue;
@@ -487,8 +521,21 @@ fn buildStreamedResponseJson(
 
     var first_block = true;
 
+    // Thinking block (OpenRouter reasoning); no signature available
+    if (stream.thinking.items.len > 0) {
+        first_block = false;
+        try out.appendSlice(allocator, "{");
+        try appendObjectFieldName(allocator, &out, "type");
+        try appendJsonString(allocator, &out, "thinking");
+        try out.append(allocator, ',');
+        try appendObjectFieldName(allocator, &out, "thinking");
+        try appendJsonString(allocator, &out, stream.thinking.items);
+        try out.append(allocator, '}');
+    }
+
     // Text block
     if (stream.text.items.len > 0) {
+        if (!first_block) try out.append(allocator, ',');
         first_block = false;
         try out.appendSlice(allocator, "{");
         try appendObjectFieldName(allocator, &out, "type");

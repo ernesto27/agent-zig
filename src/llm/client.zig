@@ -75,6 +75,7 @@ fn backendFor(name: []const u8) Backend {
         .{ "OpenAI", .openai },
         .{ "DeepSeek", .anthropic }, // uses DeepSeek's Anthropic-compatible /anthropic/v1/messages
         .{ "Gemini", .gemini },
+        .{ "OpenRouter", .openai }, // OpenAI-compatible /api/v1/chat/completions
     });
     return map.get(name) orelse std.debug.panic("unknown provider: {s}", .{name});
 }

@@ -292,7 +292,7 @@ fn handleEscape(ctx: *InputContext) !void {
     } else if (ctx.command_picker.active) {
         ctx.command_picker.reset(ctx.alloc);
     } else if (ctx.model_picker.active) {
-        ctx.model_picker.reset();
+        ctx.model_picker.reset(ctx.alloc);
     } else if (ctx.provider_picker.active) {
         ctx.provider_picker.reset();
     } else if (ctx.mcp_picker.active) {
@@ -552,7 +552,7 @@ pub fn handleEnter(ctx: *InputContext) !bool {
                 };
             }
         }
-        ctx.model_picker.reset();
+        ctx.model_picker.reset(ctx.alloc);
     } else if (ctx.mcp_picker.active) {
         ctx.mcp_picker.enter();
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {

@@ -43,12 +43,14 @@ pub const Providers = struct {
     openai: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
     deepseek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
     gemini: ProviderConfig = .{ .baseUrl = "https://generativelanguage.googleapis.com" },
+    openrouter: ProviderConfig = .{ .baseUrl = "https://openrouter.ai/api" },
 
     pub fn forProvider(self: *Providers, name: []const u8) ?*ProviderConfig {
         if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;
         if (std.mem.eql(u8, name, "OpenAI")) return &self.openai;
         if (std.mem.eql(u8, name, "DeepSeek")) return &self.deepseek;
         if (std.mem.eql(u8, name, "Gemini")) return &self.gemini;
+        if (std.mem.eql(u8, name, "OpenRouter")) return &self.openrouter;
         return null;
     }
 };
