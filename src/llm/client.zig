@@ -37,17 +37,27 @@ pub fn statusToError(status: std.http.Status) RequestError {
 }
 
 /// Read up to `buffer.len` bytes of a provider error body after the response
-/// headers. Uses `readSliceShort`, which stops at the first end-of-stream and
-/// never re-enters the std HTTP reader once it transitions to `.ready` — the
-/// re-entry that panics the delimiter-based loop. A read failure is non-fatal:
-/// it logs and yields an empty snippet so non-200 handling never depends on the
+/// headers. Streams into a fixed writer rather than `readSliceShort`: the
+/// latter swallows `EndOfStream` from the std HTTP reader once some bytes have
+/// been copied (Reader.readVec), then loops and re-enters the reader after it
+/// transitions to `.ready`, panicking on the `body_remaining_content_length`
+/// union access. `stream` propagates `EndOfStream` cleanly, so we stop at it
+/// (or at a full buffer via `WriteFailed`). A read failure is non-fatal: it
+/// logs and yields whatever was read so non-200 handling never depends on the
 /// body being readable.
 pub fn readErrorBodySnippet(response_reader: *std.Io.Reader, buffer: []u8) []const u8 {
-    const n = response_reader.readSliceShort(buffer) catch |err| {
-        log.warn("could not read provider error body: {}", .{err});
-        return buffer[0..0];
-    };
-    return buffer[0..n];
+    var w = std.Io.Writer.fixed(buffer);
+    while (true) {
+        _ = response_reader.stream(&w, .limited(buffer.len - w.end)) catch |err| switch (err) {
+            error.EndOfStream, error.WriteFailed => break,
+            error.ReadFailed => {
+                log.warn("could not read provider error body: {}", .{err});
+                break;
+            },
+        };
+        if (w.end == buffer.len) break;
+    }
+    return w.buffered();
 }
 
 /// Build a user-facing message for a request error. Never includes the API key.
@@ -170,6 +180,12 @@ pub fn prettyJson(allocator: std.mem.Allocator, json_bytes: []const u8) ![]u8 {
 pub const Client = struct {
     http_client: std.http.Client,
     config: Config,
+    /// Cache for `connectPreferIpv4`: the hostname last resolved and the IPv4
+    /// literal it produced. Owned by `http_client.allocator`. Lets DNS run once
+    /// per host instead of on every streaming request; re-resolved only when
+    /// the host changes (e.g. switching providers).
+    ipv4_host: ?[]u8 = null,
+    ipv4_addr: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Client {
         return .{
@@ -179,7 +195,104 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
+        if (self.ipv4_host) |h| self.http_client.allocator.free(h);
+        if (self.ipv4_addr) |a| self.http_client.allocator.free(a);
         self.http_client.deinit();
+    }
+
+    /// Open a TLS connection to `host:port`, preferring an IPv4 address.
+    ///
+    /// Works around a std.net limitation: `tcpConnectToHost` tries resolved
+    /// addresses in RFC-6724 order (IPv6 first when the host has a global IPv6
+    /// source address) with a blocking connect, and only advances to the next
+    /// address on `ConnectionRefused` — never on `ConnectionTimedOut`. On a host
+    /// whose IPv6 route is dead (e.g. a VPN), connecting to a Cloudflare-fronted
+    /// host like openrouter.ai hangs then fails without ever trying the working
+    /// IPv4 address.
+    ///
+    /// We connect to the cached IPv4 literal so std skips IPv6; `proxied_host`
+    /// keeps the TLS SNI (and pool key) on the real hostname so Cloudflare still
+    /// routes the request. Falls back to the default resolver when no IPv4
+    /// address is available.
+    pub fn connectPreferIpv4(
+        self: *Client,
+        allocator: std.mem.Allocator,
+        host: []const u8,
+        port: u16,
+    ) !*std.http.Client.Connection {
+        const http_client = &self.http_client;
+
+        // `request()` lazily scans the CA bundle before it connects; since we
+        // open the TLS connection ourselves *before* calling `request()`, do the
+        // scan here too or TLS init fails with an empty bundle. Runs once because
+        // std clears `next_https_rescan_certs` after the first scan.
+        if (@atomicLoad(bool, &http_client.next_https_rescan_certs, .acquire)) {
+            http_client.ca_bundle_mutex.lock();
+            defer http_client.ca_bundle_mutex.unlock();
+            if (http_client.next_https_rescan_certs) {
+                try http_client.ca_bundle.rescan(allocator);
+                @atomicStore(bool, &http_client.next_https_rescan_certs, false, .release);
+            }
+        }
+
+        if (self.resolvedIpv4(host, port)) |ip| {
+            return http_client.connectTcpOptions(.{
+                .host = ip, // numeric literal → std connects IPv4, no IPv6 attempt
+                .port = port,
+                .protocol = .tls,
+                .proxied_host = host, // TLS SNI + Host header stay the real hostname
+                .proxied_port = port,
+            });
+        }
+
+        return http_client.connectTcp(host, port, .tls);
+    }
+
+    /// Return a cached IPv4 literal for `host`, resolving (and caching) on a
+    /// miss. Cache strings use the long-lived client allocator. Returns null
+    /// when no IPv4 address is available so the caller falls back to the
+    /// default resolver.
+    fn resolvedIpv4(self: *Client, host: []const u8, port: u16) ?[]const u8 {
+        if (self.ipv4_host) |cached_host| {
+            if (std.mem.eql(u8, cached_host, host)) return self.ipv4_addr;
+        }
+
+        const gpa = self.http_client.allocator;
+        const list = std.net.getAddressList(gpa, host, port) catch |err| {
+            log.warn("connectPreferIpv4: getAddressList({s}) failed: {} — using default resolver", .{ host, err });
+            return null;
+        };
+        defer list.deinit();
+
+        var ip_buf: [15]u8 = undefined;
+        var ip: ?[]const u8 = null;
+        for (list.addrs) |addr| {
+            if (addr.any.family != std.posix.AF.INET) continue;
+            const octets = std.mem.asBytes(&addr.in.sa.addr); // 4 bytes, network order
+            ip = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{
+                octets[0], octets[1], octets[2], octets[3],
+            }) catch continue;
+            break;
+        }
+        const resolved = ip orelse {
+            log.warn("connectPreferIpv4: no IPv4 address for {s} — using default resolver", .{host});
+            return null;
+        };
+
+        const new_host = gpa.dupe(u8, host) catch |err| {
+            log.warn("connectPreferIpv4: cache alloc failed: {} — not caching", .{err});
+            return null;
+        };
+        const new_addr = gpa.dupe(u8, resolved) catch |err| {
+            log.warn("connectPreferIpv4: cache alloc failed: {} — not caching", .{err});
+            gpa.free(new_host);
+            return null;
+        };
+        if (self.ipv4_host) |h| gpa.free(h);
+        if (self.ipv4_addr) |a| gpa.free(a);
+        self.ipv4_host = new_host;
+        self.ipv4_addr = new_addr;
+        return self.ipv4_addr;
     }
 
     /// Send messages with streaming. Dispatches to Anthropic or OpenAI path based on provider_name.

@@ -284,6 +284,11 @@ pub fn sendMessageStreaming(
     defer allocator.free(url_str);
     const uri = try std.Uri.parse(url_str);
 
+    var host_buf: [std.Uri.host_name_max]u8 = undefined;
+    const host = try uri.getHost(&host_buf);
+    const port: u16 = uri.port orelse 443;
+    const conn = try self.connectPreferIpv4(allocator, host, port);
+
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{self.config.api_key});
     defer allocator.free(auth_header);
 
@@ -301,6 +306,7 @@ pub fn sendMessageStreaming(
         },
         .extra_headers = &extra_headers,
         .keep_alive = false,
+        .connection = conn,
     });
     defer http_req.deinit();
 
