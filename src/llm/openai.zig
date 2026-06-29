@@ -3,6 +3,7 @@ const json_helpers = @import("../json_helpers.zig");
 const message = @import("message.zig");
 const client = @import("client.zig");
 const config_mod = @import("../config.zig");
+const providers = @import("providers.zig");
 
 const log = std.log.scoped(.llm);
 
@@ -10,10 +11,13 @@ const appendJsonString = json_helpers.appendJsonString;
 const appendObjectFieldName = json_helpers.appendObjectFieldName;
 
 /// OpenRouter reasoning effort string, or null when reasoning must not be sent.
-/// Gated to OpenRouter so plain OpenAI requests are unchanged. `max` clamps to
-/// `high` (OpenRouter's unified reasoning API accepts low/medium/high).
-fn reasoningEffort(provider_name: []const u8, effort: config_mod.Effort) ?[]const u8 {
+/// Gated to OpenRouter and to models that declare `supports_thinking`, so plain
+/// OpenAI requests are unchanged and non-reasoning models (e.g. owl-alpha) don't
+/// get a `reasoning.effort` they would reject. `max` clamps to `high`
+/// (OpenRouter's unified reasoning API accepts low/medium/high).
+fn reasoningEffort(provider_name: []const u8, supports_thinking: bool, effort: config_mod.Effort) ?[]const u8 {
     if (!std.mem.eql(u8, provider_name, "OpenRouter")) return null;
+    if (!supports_thinking) return null;
     return switch (effort) {
         .none => null,
         .low => "low",
@@ -266,7 +270,9 @@ pub fn sendMessageStreaming(
     on_thinking_chunk: *const fn (*anyopaque, []const u8) void,
     should_cancel: client.CancelFn,
 ) !std.json.Parsed(message.MessagesResponse) {
-    const reasoning_eff = reasoningEffort(self.config.provider_name, self.config.effort);
+    const model_info = providers.findModel(self.config.model);
+    const supports_thinking = model_info != null and model_info.?.model.supports_thinking;
+    const reasoning_eff = reasoningEffort(self.config.provider_name, supports_thinking, self.config.effort);
     const body = try buildRequestBody(allocator, self.config.model, messages, tools, system_prompt, true, reasoning_eff);
     defer allocator.free(body);
 
