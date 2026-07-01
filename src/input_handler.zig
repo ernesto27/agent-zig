@@ -248,7 +248,7 @@ const SlashResult = enum { none, send, quit };
 fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction) !SlashResult {
     clearInput(ctx);
     switch (action) {
-        .provider => ctx.provider_picker.open(),
+        .provider => try ctx.provider_picker.open(ctx.alloc),
         .model => try ctx.model_picker.open(ctx.alloc),
         .clear => ctx.app.clearHistory(),
         .compact => {
@@ -416,6 +416,11 @@ fn handleBackspace(ctx: *InputContext) !void {
     if (ctx.app.sessions.rename_active) {
         if (ctx.app.sessions.rename_input.items.len > 0)
             _ = ctx.app.sessions.rename_input.orderedRemove(ctx.app.sessions.rename_input.items.len - 1);
+    } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
+        if (ctx.provider_picker.query.items.len > 0) {
+            _ = ctx.provider_picker.query.orderedRemove(ctx.provider_picker.query.items.len - 1);
+            try ctx.provider_picker.refresh(alloc);
+        }
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         if (ctx.provider_picker.key_input.items.len > 0)
             _ = ctx.provider_picker.key_input.orderedRemove(ctx.provider_picker.key_input.items.len - 1);
@@ -455,6 +460,9 @@ fn handleTextInput(ctx: *InputContext, txt: []const u8) !void {
     const alloc = ctx.alloc;
     if (ctx.app.sessions.rename_active) {
         try ctx.app.sessions.rename_input.appendSlice(alloc, txt);
+    } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
+        try ctx.provider_picker.query.appendSlice(alloc, txt);
+        try ctx.provider_picker.refresh(alloc);
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         try ctx.provider_picker.key_input.appendSlice(alloc, txt);
     } else if (ctx.model_picker.active) {
@@ -576,7 +584,9 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         ctx.logout_picker.reset();
         ctx.app.needs_redraw = true;
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
-        ctx.provider_picker.phase = .key_input;
+        if (ctx.provider_picker.results.items.len > 0) {
+            ctx.provider_picker.phase = .key_input;
+        }
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
         if (ctx.provider_picker.key_input.items.len > 0) {
             const new_key = ctx.provider_picker.key_input.items;

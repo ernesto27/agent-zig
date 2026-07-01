@@ -1,37 +1,60 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
+const modal_list = @import("modal_list.zig");
 const p = agent.llm.providers;
 
- pub const Phase = enum { list, key_input };
+pub const Phase = enum { list, key_input };
 
 pub const ProviderPicker = struct {
-    active: bool = false, 
+    active: bool = false,
     selected: usize = 0,
     phase: Phase = .list,
     key_input: std.ArrayList(u8) = .{},
+    query: std.ArrayList(u8) = .{},
+    results: std.ArrayList(*const p.Provider) = .{},
 
     pub fn init() ProviderPicker {
         return .{};
     }
 
     pub fn deinit(self: *ProviderPicker, alloc: std.mem.Allocator) void {
+        self.query.deinit(alloc);
+        self.results.deinit(alloc);
         self.key_input.deinit(alloc);
     }
 
-    pub fn open(self: *ProviderPicker) void {
+    pub fn refresh(self: *ProviderPicker, alloc: std.mem.Allocator) !void {
+        self.results.clearRetainingCapacity();
+        self.selected = 0;
+
+        for (&p.providers) |*prov| {
+            const q = self.query.items;
+            const matches = q.len == 0 or
+                std.ascii.indexOfIgnoreCase(prov.name, q) != null;
+            if (!matches) continue;
+            try self.results.append(alloc, prov);
+        }
+    }
+
+    pub fn open(self: *ProviderPicker, alloc: std.mem.Allocator) !void {
         self.active = true;
         self.selected = 0;
         self.phase = .list;
+        self.query.clearRetainingCapacity();
+        try self.refresh(alloc);
     }
+
     pub fn selectedProvider(self: *const ProviderPicker) *const p.Provider {
-        return &p.providers[self.selected];
+        return self.results.items[self.selected];
     }
 
     pub fn reset(self: *ProviderPicker) void {
         self.active = false;
         self.selected = 0;
         self.phase = .list;
+        self.query.clearRetainingCapacity();
+        self.results.clearRetainingCapacity();
         self.key_input.clearRetainingCapacity();
     }
 
@@ -40,58 +63,50 @@ pub const ProviderPicker = struct {
     }
 
     pub fn moveDown(self: *ProviderPicker) void {
-        if (self.phase == .list and self.selected + 1 < p.providers.len) self.selected += 1;
+        if (self.phase == .list and self.selected + 1 < self.results.items.len) self.selected += 1;
     }
 
     pub fn render(self: *const ProviderPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {
-        const modal_w: u16 = @min(50, screen_w -| 4);
-        const modal_h: u16 = if (self.phase == .list)
-            @intCast(p.providers.len + 4)
-        else
-            7;
-        const modal_x: u16 = (screen_w -| modal_w) / 2;
-        const modal_y: u16 = (screen_h -| modal_h) / 2;
-
-        const modal = win.child(.{
-            .x_off = modal_x,
-            .y_off = modal_y,
-            .width = modal_w,
-            .height = modal_h,
-            .border = .{ .where = .all, .glyphs = .single_rounded },
-        });
-
-        var fr: u16 = 0;
-        while (fr < modal_h) : (fr += 1) {
-            var fc: u16 = 0;
-            while (fc < modal_w) : (fc += 1) {
-                modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 } });
-            }
-        }
-
         switch (self.phase) {
             .list => {
-                _ = modal.printSegment(.{
-                    .text = " Select provider",
-                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
-                }, .{ .row_offset = 0, .col_offset = 1 });
-                _ = modal.printSegment(.{
-                    .text = "esc ",
-                    .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
-                }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
-
-                const bg: vaxis.Color = .default;
-                for (p.providers, 0..) |prov, idx| {
-                    const prow: u16 = @intCast(idx + 2);
-                    const is_sel = idx == self.selected;
-                    const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
-
-                    _ = modal.printSegment(.{
-                        .text = prov.name,
-                        .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
-                    }, .{ .row_offset = prow, .col_offset = 2 });
+                const max_items = 64;
+                var items_buf: [max_items]modal_list.Item = undefined;
+                const n = @min(self.results.items.len, max_items);
+                for (self.results.items[0..n], 0..) |prov, i| {
+                    items_buf[i] = .{ .primary = prov.name };
                 }
+
+                modal_list.render(win, screen_w, screen_h, .{
+                    .title = " Select provider",
+                    .query = self.query.items,
+                    .items = items_buf[0..n],
+                    .selected = self.selected,
+                    .max_width = 60,
+                    .max_height = 20,
+                });
             },
             .key_input => {
+                const modal_w: u16 = @min(50, screen_w -| 4);
+                const modal_h: u16 = 7;
+                const modal_x: u16 = (screen_w -| modal_w) / 2;
+                const modal_y: u16 = (screen_h -| modal_h) / 2;
+
+                const modal = win.child(.{
+                    .x_off = modal_x,
+                    .y_off = modal_y,
+                    .width = modal_w,
+                    .height = modal_h,
+                    .border = .{ .where = .all, .glyphs = .single_rounded },
+                });
+
+                var fr: u16 = 0;
+                while (fr < modal_h) : (fr += 1) {
+                    var fc: u16 = 0;
+                    while (fc < modal_w) : (fc += 1) {
+                        modal.writeCell(fc, fr, .{ .char = .{ .grapheme = " ", .width = 1 } });
+                    }
+                }
+
                 const provider = self.selectedProvider();
                 _ = modal.printSegment(.{
                     .text = " API key for ",

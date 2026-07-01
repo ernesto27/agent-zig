@@ -33,7 +33,7 @@ const fg_placeholder: vaxis.Color = .{ .rgb = .{ 0x66, 0x66, 0x66 } };
 
 pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) void {
     const has_query = opts.query != null;
-    const overhead: u16 = if (has_query) 5 else 4;
+    const overhead: u16 = if (has_query) 7 else 4;
     const item_count: u16 = @intCast(opts.items.len);
     const wanted_h: u16 = @min(opts.max_height, @max(@as(u16, 6), item_count + overhead));
     const modal_w: u16 = @min(opts.max_width, screen_w -| 4);
@@ -69,14 +69,14 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         }, .{ .row_offset = 0, .col_offset = modal_w - hint_len - 2 });
     }
 
-    const items_row: u16 = 2;
+    const items_row: u16 = if (has_query) 4 else 2;
     if (opts.query) |q| {
         const text = if (q.len > 0) q else opts.query_placeholder;
         const style: vaxis.Style = if (q.len > 0)
             .{ .fg = fg_selected }
         else
             .{ .fg = fg_placeholder };
-        _ = modal.printSegment(.{ .text = text, .style = style }, .{ .row_offset = 1, .col_offset = 2 });
+        _ = modal.printSegment(.{ .text = text, .style = style }, .{ .row_offset = 2, .col_offset = 2 });
     }
 
     if (opts.items.len == 0) {
