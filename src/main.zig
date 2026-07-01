@@ -10,6 +10,7 @@ const at_picker_mod = @import("at_picker.zig");
 const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
+const logout_picker_mod = @import("logout_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
 const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
@@ -94,11 +95,18 @@ pub fn main() !void {
     };
     defer config_store.deinit();
 
+    const authed = config_store.cfg.providers.authenticated();
+    for (authed.slice()) |name| {
+        log.debug("authenticated provider={s}", .{name});
+    }
+
     var model_picker = model_picker_mod.ModelPicker.init();
     defer model_picker.deinit(alloc);
 
     var provider_picker = provider_picker_mod.ProviderPicker.init();
     defer provider_picker.deinit(alloc);
+
+    var logout_picker = logout_picker_mod.LogoutPicker.init();
 
     var mcp_picker = mcp_picker_mod.McpPicker.init();
     defer mcp_picker.deinit(alloc);
@@ -193,6 +201,7 @@ pub fn main() !void {
         .command_picker = &command_picker,
         .model_picker = &model_picker,
         .provider_picker = &provider_picker,
+        .logout_picker = &logout_picker,
         .mcp_picker = &mcp_picker,
         .skills_picker = &skills_picker,
         .trust_dialog = &trust_dialog,
@@ -478,6 +487,11 @@ pub fn main() !void {
         // /provider picker overlay
         if (provider_picker.active) {
             provider_picker.render(win, vx.screen.width, vx.screen.height);
+        }
+
+        // /logout picker overlay
+        if (logout_picker.active) {
+            logout_picker.render(win, vx.screen.width, vx.screen.height);
         }
 
         if (mcp_picker.active) {

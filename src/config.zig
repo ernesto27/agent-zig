@@ -39,19 +39,50 @@ pub const ProviderConfig = struct { apiKey: []const u8 = "", baseUrl: []const u8
 
 pub const Providers = struct {
     selected: []const u8 = "",
-    anthropic: ProviderConfig = .{ .baseUrl = "https://api.anthropic.com" },
-    openai: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
-    deepseek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
-    gemini: ProviderConfig = .{ .baseUrl = "https://generativelanguage.googleapis.com" },
-    openrouter: ProviderConfig = .{ .baseUrl = "https://openrouter.ai/api" },
+    Anthropic: ProviderConfig = .{ .baseUrl = "https://api.anthropic.com" },
+    OpenAI: ProviderConfig = .{ .baseUrl = "https://api.openai.com" },
+    DeepSeek: ProviderConfig = .{ .baseUrl = "https://api.deepseek.com/anthropic" },
+    Gemini: ProviderConfig = .{ .baseUrl = "https://generativelanguage.googleapis.com" },
+    OpenRouter: ProviderConfig = .{ .baseUrl = "https://openrouter.ai/api" },
 
     pub fn forProvider(self: *Providers, name: []const u8) ?*ProviderConfig {
-        if (std.mem.eql(u8, name, "Anthropic")) return &self.anthropic;
-        if (std.mem.eql(u8, name, "OpenAI")) return &self.openai;
-        if (std.mem.eql(u8, name, "DeepSeek")) return &self.deepseek;
-        if (std.mem.eql(u8, name, "Gemini")) return &self.gemini;
-        if (std.mem.eql(u8, name, "OpenRouter")) return &self.openrouter;
+        if (std.mem.eql(u8, name, "Anthropic")) return &self.Anthropic;
+        if (std.mem.eql(u8, name, "OpenAI")) return &self.OpenAI;
+        if (std.mem.eql(u8, name, "DeepSeek")) return &self.DeepSeek;
+        if (std.mem.eql(u8, name, "Gemini")) return &self.Gemini;
+        if (std.mem.eql(u8, name, "OpenRouter")) return &self.OpenRouter;
         return null;
+    }
+
+    /// Number of ProviderConfig fields — the backing array size.
+    pub const count = blk: {
+        var n: usize = 0;
+        for (@typeInfo(Providers).@"struct".fields) |f| {
+            if (f.type == ProviderConfig) n += 1;
+        }
+        break :blk n;
+    };
+
+    pub const Authenticated = struct {
+        names: [count][]const u8 = undefined,
+        len: usize = 0,
+
+        pub fn slice(self: *const Authenticated) []const []const u8 {
+            return self.names[0..self.len];
+        }
+    };
+
+    pub fn authenticated(self: *const Providers) Authenticated {
+        var result: Authenticated = .{};
+        inline for (@typeInfo(Providers).@"struct".fields) |f| {
+            if (f.type == ProviderConfig) {
+                if (@field(self, f.name).apiKey.len > 0) {
+                    result.names[result.len] = f.name;
+                    result.len += 1;
+                }
+            }
+        }
+        return result;
     }
 };
 
@@ -197,6 +228,21 @@ pub const ConfigStore = struct {
             field.* = value;
         }
         try self.write(self.cfg);
+    }
+
+    pub fn removeProvider(self: *ConfigStore, name: []const u8) !bool {
+        var found = false;
+        inline for (@typeInfo(Providers).@"struct".fields) |f| {
+            if (f.type == ProviderConfig and std.mem.eql(u8, f.name, name)) {
+                const pc = &@field(self.cfg.providers, f.name);
+                pc.apiKey = "";
+                pc.model = "";
+                pc.thinkEffort = "";
+                found = true;
+            }
+        }
+        if (found) try self.write(self.cfg);
+        return found;
     }
 
     pub fn createSession(self: *ConfigStore, file: []const u8, name: []const u8) !void {

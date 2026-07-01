@@ -1,6 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const model_picker = @import("model_picker.zig");
+const agent = @import("agent");
+const p = agent.llm.providers;
 
  pub const Phase = enum { list, key_input };
 
@@ -23,8 +24,8 @@ pub const ProviderPicker = struct {
         self.selected = 0;
         self.phase = .list;
     }
-    pub fn selectedProvider(self: *const ProviderPicker) *const model_picker.Provider {
-        return &model_picker.providers[self.selected];
+    pub fn selectedProvider(self: *const ProviderPicker) *const p.Provider {
+        return &p.providers[self.selected];
     }
 
     pub fn reset(self: *ProviderPicker) void {
@@ -34,10 +35,18 @@ pub const ProviderPicker = struct {
         self.key_input.clearRetainingCapacity();
     }
 
+    pub fn moveUp(self: *ProviderPicker) void {
+        if (self.phase == .list and self.selected > 0) self.selected -= 1;
+    }
+
+    pub fn moveDown(self: *ProviderPicker) void {
+        if (self.phase == .list and self.selected + 1 < p.providers.len) self.selected += 1;
+    }
+
     pub fn render(self: *const ProviderPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {
         const modal_w: u16 = @min(50, screen_w -| 4);
         const modal_h: u16 = if (self.phase == .list)
-            @intCast(model_picker.providers.len + 4)
+            @intCast(p.providers.len + 4)
         else
             7;
         const modal_x: u16 = (screen_w -| modal_w) / 2;
@@ -71,13 +80,13 @@ pub const ProviderPicker = struct {
                 }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
 
                 const bg: vaxis.Color = .default;
-                for (model_picker.providers, 0..) |p, idx| {
+                for (p.providers, 0..) |prov, idx| {
                     const prow: u16 = @intCast(idx + 2);
                     const is_sel = idx == self.selected;
                     const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
 
                     _ = modal.printSegment(.{
-                        .text = p.name,
+                        .text = prov.name,
                         .style = .{ .fg = fg, .bg = bg, .bold = is_sel },
                     }, .{ .row_offset = prow, .col_offset = 2 });
                 }

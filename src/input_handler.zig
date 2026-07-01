@@ -6,6 +6,7 @@ const at_picker_mod = @import("at_picker.zig");
 const command_picker_mod = @import("commands/command_picker.zig");
 const model_picker_mod = @import("model_picker.zig");
 const provider_picker_mod = @import("provider_picker.zig");
+const logout_picker_mod = @import("logout_picker.zig");
 const mcp_picker_mod = @import("mcp_picker.zig");
 const skills_picker_mod = @import("skills_picker.zig");
 const trust_dialog_mod = @import("trust_dialog.zig");
@@ -28,6 +29,7 @@ pub const InputContext = struct {
     command_picker: *command_picker_mod.CommandPicker,
     model_picker: *model_picker_mod.ModelPicker,
     provider_picker: *provider_picker_mod.ProviderPicker,
+    logout_picker: *logout_picker_mod.LogoutPicker,
     mcp_picker: *mcp_picker_mod.McpPicker,
     skills_picker: *skills_picker_mod.SkillsPicker,
     trust_dialog: *trust_dialog_mod.TrustDialog,
@@ -84,6 +86,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.command_picker.active or
             ctx.model_picker.active or
             ctx.provider_picker.active or
+            ctx.logout_picker.active or
             ctx.mcp_picker.active or
             ctx.skills_picker.active or
             ctx.app.sessions.active or
@@ -278,6 +281,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             return .none;
         },
         .exit => return .quit,
+        .logout => ctx.logout_picker.open(ctx.config.cfg.providers.authenticated()),
     }
     return .none;
 }
@@ -295,6 +299,8 @@ fn handleEscape(ctx: *InputContext) !void {
         ctx.model_picker.reset(ctx.alloc);
     } else if (ctx.provider_picker.active) {
         ctx.provider_picker.reset();
+    } else if (ctx.logout_picker.active) {
+        ctx.logout_picker.reset();
     } else if (ctx.mcp_picker.active) {
         if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset();
     } else if (ctx.skills_picker.active) {
@@ -324,8 +330,10 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                 if (ctx.command_picker.selected > 0) ctx.command_picker.selected -= 1;
             } else if (ctx.model_picker.active) {
                 if (ctx.model_picker.selected > 0) ctx.model_picker.selected -= 1;
-            } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
-                if (ctx.provider_picker.selected > 0) ctx.provider_picker.selected -= 1;
+            } else if (ctx.provider_picker.active) {
+                ctx.provider_picker.moveUp();
+            } else if (ctx.logout_picker.active) {
+                ctx.logout_picker.moveUp();
             } else if (ctx.mcp_picker.active) {
                 ctx.mcp_picker.moveUp();
             } else if (ctx.skills_picker.active) {
@@ -366,9 +374,10 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
             } else if (ctx.model_picker.active) {
                 if (ctx.model_picker.selected + 1 < ctx.model_picker.results.items.len)
                     ctx.model_picker.selected += 1;
-            } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
-                if (ctx.provider_picker.selected + 1 < model_picker_mod.providers.len)
-                    ctx.provider_picker.selected += 1;
+            } else if (ctx.provider_picker.active) {
+                ctx.provider_picker.moveDown();
+            } else if (ctx.logout_picker.active) {
+                ctx.logout_picker.moveDown();
             } else if (ctx.mcp_picker.active) {
                 ctx.mcp_picker.moveDown();
             } else if (ctx.skills_picker.active) {
@@ -555,6 +564,17 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         ctx.model_picker.reset(ctx.alloc);
     } else if (ctx.mcp_picker.active) {
         ctx.mcp_picker.enter();
+    } else if (ctx.logout_picker.active) {
+        if (ctx.logout_picker.selectedProvider()) |provider_name| {
+            if (ctx.config.removeProvider(provider_name)) |_| {
+                if (std.mem.eql(u8, ctx.app.llm_client.config.provider_name, provider_name))
+                    ctx.app.llm_client.config.api_key = "";
+            } else |err| {
+                log.err("failed to remove provider {s}: {}", .{ provider_name, err });
+            }
+        }
+        ctx.logout_picker.reset();
+        ctx.app.needs_redraw = true;
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .list) {
         ctx.provider_picker.phase = .key_input;
     } else if (ctx.provider_picker.active and ctx.provider_picker.phase == .key_input) {
