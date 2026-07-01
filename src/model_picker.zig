@@ -56,7 +56,8 @@ pub const ModelPicker = struct {
                 const q = self.query.items;
                 const matches = q.len == 0 or
                     std.ascii.indexOfIgnoreCase(m.display, q) != null or
-                    std.ascii.indexOfIgnoreCase(m.id, q) != null;
+                    std.ascii.indexOfIgnoreCase(m.id, q) != null or
+                    std.ascii.indexOfIgnoreCase(prov.name, q) != null;
                 if (!matches) continue;
                 try self.results.append(alloc, m);
                 try self.labels.append(alloc, try buildLabel(alloc, prov.name, m.id));
