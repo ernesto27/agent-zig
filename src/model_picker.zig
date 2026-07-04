@@ -17,6 +17,7 @@ pub const ModelPicker = struct {
     selected: usize = 0,
     results: std.ArrayList(*const Model) = .{},
     labels: std.ArrayList([]const u8) = .{},
+    providers_cfg: ?*const agent.config.Providers = null,
 
     pub fn init() ModelPicker {
         return .{};
@@ -50,6 +51,9 @@ pub const ModelPicker = struct {
         self.selected = 0;
 
         for (&p.providers) |*prov| {
+            if (self.providers_cfg) |cfg| {
+                if (!cfg.isConfigured(prov.name)) continue;
+            }
             for (prov.models) |*m| {
                 const q = self.query.items;
                 const matches = q.len == 0 or
@@ -63,6 +67,8 @@ pub const ModelPicker = struct {
         }
 
         const or_prov = p.openrouter_store.provider();
+        const or_configured = if (self.providers_cfg) |cfg| cfg.isConfigured(or_prov.name) else true;
+        if (!or_configured) return;
         for (p.openrouter_store.models()) |*m| {
             const q = self.query.items;
             const matches = q.len == 0 or
@@ -75,8 +81,9 @@ pub const ModelPicker = struct {
         }
     }
 
-    pub fn open(self: *ModelPicker, alloc: std.mem.Allocator) !void {
+    pub fn open(self: *ModelPicker, alloc: std.mem.Allocator, providers_cfg: *const agent.config.Providers) !void {
         self.active = true;
+        self.providers_cfg = providers_cfg;
         self.query.clearRetainingCapacity();
         self.selected = 0;
         try self.refresh(alloc);
@@ -88,6 +95,7 @@ pub const ModelPicker = struct {
         self.selected = 0;
         self.clearLabels(alloc);
         self.results.clearRetainingCapacity();
+        self.providers_cfg = null;
     }
 
     pub fn render(self: *const ModelPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {

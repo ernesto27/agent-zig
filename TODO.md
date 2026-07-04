@@ -11,7 +11,7 @@
 [x] - render attached text files preview in panel
 [x] - when ctrl-c or quit,  show option to resume latess conver
 [] - only show models that have api key configured
-[] - remove orange for text TUI response
+[x] - remove orange for text TUI response
 [x] - add logout opton
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json

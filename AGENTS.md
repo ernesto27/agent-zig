@@ -43,6 +43,7 @@
 - Work directly on `master`. Do not create feature branches for changes, even when running plan/execution workflows that default to branching.
 - Commit messages are a single-line subject only: no body, no bullet description.
 - Never add a `Co-Authored-By` trailer to commits.
+- When an email is needed (plan authorship, docs attribution), use `ernestoponce27@gmail.com`, not the Claude Code account email.
 
 ## UI Commands
 

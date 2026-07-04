@@ -54,6 +54,15 @@ pub const Providers = struct {
         return null;
     }
 
+    pub fn isConfigured(self: *const Providers, name: []const u8) bool {
+        inline for (@typeInfo(Providers).@"struct".fields) |f| {
+            if (f.type == ProviderConfig and std.mem.eql(u8, f.name, name)) {
+                return @field(self, f.name).apiKey.len > 0;
+            }
+        }
+        return false;
+    }
+
     /// Number of ProviderConfig fields — the backing array size.
     pub const count = blk: {
         var n: usize = 0;

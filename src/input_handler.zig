@@ -249,7 +249,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
     clearInput(ctx);
     switch (action) {
         .provider => try ctx.provider_picker.open(ctx.alloc),
-        .model => try ctx.model_picker.open(ctx.alloc),
+        .model => try ctx.model_picker.open(ctx.alloc, &ctx.config.cfg.providers),
         .clear => ctx.app.clearHistory(),
         .compact => {
             if (ctx.app.loading.active) return .none;
@@ -600,14 +600,10 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         if (ctx.provider_picker.key_input.items.len > 0) {
             const new_key = ctx.provider_picker.key_input.items;
             const provider_name = ctx.provider_picker.selectedProvider().name;
-            {
-                // See model-pick block above: shares app.mutex with the
-                // OpenRouter fetch thread to avoid a torn slice write.
-                ctx.app.mutex.lock();
-                defer ctx.app.mutex.unlock();
-                ctx.app.llm_client.config.api_key = new_key;
-                ctx.app.llm_client.config.provider_name = provider_name;
-            }
+            // Persist the key only. Adding a key is credential management, not a
+            // selection switch: leave the active provider/model untouched so a
+            // key for one provider can't hijack a working selection on another.
+            // Use /model to switch providers.
             if (ctx.config.cfg.providers.forProvider(provider_name)) |pc| {
                 ctx.config.set(&pc.apiKey, new_key) catch |err| {
                     log.err("failed to persist api key: {}", .{err});

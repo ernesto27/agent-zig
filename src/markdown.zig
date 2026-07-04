@@ -15,7 +15,7 @@ const style_italic: Style = .{ .italic = true };
 const style_bold_italic: Style = .{ .bold = true, .italic = true };
 const style_inline_code: Style = .{
     .bg = .{ .rgb = .{ 0x3A, 0x3A, 0x3A } },
-    .fg = .{ .rgb = .{ 0xFF, 0xA0, 0x60 } },
+    .fg = .{ .rgb = .{ 0x70, 0xB0, 0xF0 } },
 };
 const style_code_text: Style = .{
     .fg = .{ .rgb = .{ 0xD0, 0xD0, 0xD0 } },
