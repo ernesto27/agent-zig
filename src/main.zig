@@ -48,6 +48,34 @@ fn versionCheckThread(app: *App, loop: *EventLoop) void {
     }
 }
 
+fn openRouterFetchThread(app: *App, loop: *EventLoop) void {
+    agent.llm.providers.openrouter_store.fetch(app.alloc) catch |err| {
+        log.err("OpenRouter model fetch failed: {}", .{err});
+        return;
+    };
+
+    app.mutex.lock();
+    // If the persisted selection is an OpenRouter model, it wasn't resolvable at
+    // startup (store was empty). Now that the list is loaded, wire up the client
+    // config. Guard on an empty provider_name so we never clobber an already
+    // resolved (static-provider) selection or an in-flight request's config.
+    if (app.llm_client.config.provider_name.len == 0) {
+        if (agent.llm.providers.findModel(app.llm_client.config.model)) |found| {
+            app.llm_client.config.provider_name = found.provider.name;
+            if (app.config_store.cfg.providers.forProvider(found.provider.name)) |pc| {
+                app.llm_client.config.base_url = pc.baseUrl;
+                app.llm_client.config.api_key = pc.apiKey;
+                agent.config.resolveApiKey(&app.llm_client.config.api_key, found.provider.name);
+                app.llm_client.config.effort = app.config_store.thinkEffort(found.provider.name);
+            }
+        }
+    }
+    app.needs_redraw = true;
+    app.mutex.unlock();
+
+    ui.wakeLoop(loop);
+}
+
 pub const std_options: std.Options = .{
     .logFn = log_mod.Logger.logToFile,
 };
@@ -232,6 +260,9 @@ pub fn main() !void {
 
     const version_thread = try std.Thread.spawn(.{}, versionCheckThread, .{ &app, &loop });
     version_thread.detach();
+
+    const openrouter_thread = try std.Thread.spawn(.{}, openRouterFetchThread, .{ &app, &loop });
+    openrouter_thread.detach();
 
     while (running) {
         const event = loop.nextEvent();

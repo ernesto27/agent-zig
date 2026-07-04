@@ -553,20 +553,27 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         ctx.at_picker.reset(alloc);
     } else if (ctx.model_picker.active and ctx.model_picker.results.items.len > 0) {
         const selected = ctx.model_picker.results.items[ctx.model_picker.selected];
-        ctx.app.llm_client.config.model = selected.id;
-        ctx.config.set(&ctx.config.cfg.providers.selected, selected.id) catch |err| {
-            log.err("failed to persist selected provider: {}", .{err});
-        };
-        if (agent.llm.providers.findModel(selected.id)) |found| {
-            ctx.app.llm_client.config.provider_name = found.provider.name;
-            if (ctx.config.cfg.providers.forProvider(found.provider.name)) |pc| {
-                ctx.app.llm_client.config.base_url = pc.baseUrl;
-                ctx.app.llm_client.config.api_key = pc.apiKey;
-                agent.config.resolveApiKey(&ctx.app.llm_client.config.api_key, found.provider.name);
-                ctx.app.llm_client.config.effort = ctx.config.thinkEffort(found.provider.name);
-                ctx.config.set(&pc.model, selected.id) catch |err| {
-                    log.err("failed to persist model: {}", .{err});
-                };
+        {
+            // Guard llm_client.config writes: openRouterFetchThread mutates the
+            // same slice fields under app.mutex, so both writers must share it —
+            // a torn ptr+len write would otherwise yield an invalid slice.
+            ctx.app.mutex.lock();
+            defer ctx.app.mutex.unlock();
+            ctx.app.llm_client.config.model = selected.id;
+            ctx.config.set(&ctx.config.cfg.providers.selected, selected.id) catch |err| {
+                log.err("failed to persist selected provider: {}", .{err});
+            };
+            if (agent.llm.providers.findModel(selected.id)) |found| {
+                ctx.app.llm_client.config.provider_name = found.provider.name;
+                if (ctx.config.cfg.providers.forProvider(found.provider.name)) |pc| {
+                    ctx.app.llm_client.config.base_url = pc.baseUrl;
+                    ctx.app.llm_client.config.api_key = pc.apiKey;
+                    agent.config.resolveApiKey(&ctx.app.llm_client.config.api_key, found.provider.name);
+                    ctx.app.llm_client.config.effort = ctx.config.thinkEffort(found.provider.name);
+                    ctx.config.set(&pc.model, selected.id) catch |err| {
+                        log.err("failed to persist model: {}", .{err});
+                    };
+                }
             }
         }
         ctx.model_picker.reset(ctx.alloc);
@@ -575,6 +582,8 @@ pub fn handleEnter(ctx: *InputContext) !bool {
     } else if (ctx.logout_picker.active) {
         if (ctx.logout_picker.selectedProvider()) |provider_name| {
             if (ctx.config.removeProvider(provider_name)) |_| {
+                ctx.app.mutex.lock();
+                defer ctx.app.mutex.unlock();
                 if (std.mem.eql(u8, ctx.app.llm_client.config.provider_name, provider_name))
                     ctx.app.llm_client.config.api_key = "";
             } else |err| {
@@ -591,8 +600,14 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         if (ctx.provider_picker.key_input.items.len > 0) {
             const new_key = ctx.provider_picker.key_input.items;
             const provider_name = ctx.provider_picker.selectedProvider().name;
-            ctx.app.llm_client.config.api_key = new_key;
-            ctx.app.llm_client.config.provider_name = provider_name;
+            {
+                // See model-pick block above: shares app.mutex with the
+                // OpenRouter fetch thread to avoid a torn slice write.
+                ctx.app.mutex.lock();
+                defer ctx.app.mutex.unlock();
+                ctx.app.llm_client.config.api_key = new_key;
+                ctx.app.llm_client.config.provider_name = provider_name;
+            }
             if (ctx.config.cfg.providers.forProvider(provider_name)) |pc| {
                 ctx.config.set(&pc.apiKey, new_key) catch |err| {
                     log.err("failed to persist api key: {}", .{err});

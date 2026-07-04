@@ -35,6 +35,12 @@ pub const ProviderPicker = struct {
             if (!matches) continue;
             try self.results.append(alloc, prov);
         }
+
+        const or_prov = p.openrouter_store.provider();
+        const q = self.query.items;
+        if (q.len == 0 or std.ascii.indexOfIgnoreCase(or_prov.name, q) != null) {
+            try self.results.append(alloc, or_prov);
+        }
     }
 
     pub fn open(self: *ProviderPicker, alloc: std.mem.Allocator) !void {

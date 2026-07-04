@@ -358,6 +358,7 @@ pub const App = struct {
         self.system_prompt.deinit(self.alloc);
         self.sessions.deinit();
         if (self.latest_version) |v| self.alloc.free(v);
+        agent.llm.providers.openrouter_store.deinit();
     }
 
     fn setGrepStatus(self: *Self, pattern: []const u8, path: []const u8, include: []const u8) void {

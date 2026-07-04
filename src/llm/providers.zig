@@ -1,4 +1,7 @@
 const std = @import("std");
+const json_helpers = @import("../json_helpers.zig");
+
+const log = std.log.scoped(.providers);
 
 pub const Model = struct {
     id: []const u8,
@@ -54,22 +57,149 @@ pub const providers = [_]Provider{
             .{ .id = "gemini-2.5-flash-lite", .display = "Gemini 2.5 Flash Lite", .max_context = 1_048_576 },
         },
     },
-    .{
-        .name = "OpenRouter",
-        .models = &[_]Model{
-            .{ .id = "deepseek/deepseek-v4-flash", .display = "OR: DeepSeek V4 Flash", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "xiaomi/mimo-v2.5", .display = "OR: Xiaomi MiMo-V2.5", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "minimax/minimax-m3", .display = "OR: MiniMax M3", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "openrouter/owl-alpha", .display = "OR: Owl Alpha (free)", .free = true, .max_context = 1_048_756 },
-            .{ .id = "anthropic/claude-opus-4.7", .display = "OR: Claude Opus 4.7", .supports_thinking = true, .max_context = 1_000_000 },
-            .{ .id = "z-ai/glm-5.2", .display = "OR: GLM 5.2", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "deepseek/deepseek-v4-pro", .display = "OR: DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "anthropic/claude-opus-4.8", .display = "OR: Claude Opus 4.8", .supports_thinking = true, .max_context = 1_000_000 },
-            .{ .id = "openai/gpt-5.5", .display = "OR: GPT-5.5", .supports_thinking = true, .max_context = 1_050_000 },
-            .{ .id = "google/gemini-2.5-pro", .display = "OR: Gemini 2.5 Pro", .supports_thinking = true, .max_context = 1_048_576 },
-        },
-    },
 };
+
+// === Dynamic OpenRouter model store ===
+//
+// The four providers above are compile-time data. OpenRouter has hundreds of
+// models that change over time, so its list is fetched from the API at startup
+// (see OpenRouterStore.fetch) into the module-level `openrouter_store`. Exactly
+// one publish happens per session, so `models_slice` goes empty -> populated
+// once and the backing arena is freed only in deinit; therefore any *const
+// Model returned by find/findModel stays valid for the whole app lifetime.
+
+const openrouter_url = "https://openrouter.ai/api/v1/models";
+
+pub const OpenRouterStore = struct {
+    mutex: std.Thread.Mutex = .{},
+    arena: ?std.heap.ArenaAllocator = null,
+    models_slice: []const Model = &.{},
+    provider_entry: Provider = .{ .name = "OpenRouter", .models = &.{} },
+
+    /// Stable-address synthetic OpenRouter provider. Always valid; its `.models`
+    /// may be empty until `fetch` publishes.
+    pub fn provider(self: *OpenRouterStore) *const Provider {
+        return &self.provider_entry;
+    }
+
+    /// Snapshot of the currently published models. Elements live for the app's
+    /// lifetime (arena freed only in `deinit`), so the returned slice may be
+    /// iterated after the lock is released.
+    pub fn models(self: *OpenRouterStore) []const Model {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.models_slice;
+    }
+
+    /// Resolve a dynamic OpenRouter model id to its provider + model pointers.
+    pub fn find(self: *OpenRouterStore, id: []const u8) ?FindResult {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.models_slice) |*m| {
+            if (std.mem.eql(u8, m.id, id)) return .{ .provider = &self.provider_entry, .model = m };
+        }
+        return null;
+    }
+
+    /// Takes ownership of `arena` and publishes `ms` (which must be allocated
+    /// from `arena`). Called once, from the fetch thread.
+    fn publish(self: *OpenRouterStore, arena: std.heap.ArenaAllocator, ms: []const Model) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.arena = arena;
+        self.models_slice = ms;
+        self.provider_entry.models = ms;
+    }
+
+    /// Frees the store arena. Call once at shutdown, before the gpa is deinited.
+    pub fn deinit(self: *OpenRouterStore) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.arena) |*aptr| aptr.deinit();
+        self.arena = null;
+        self.models_slice = &.{};
+        self.provider_entry.models = &.{};
+    }
+
+    /// Fetch the OpenRouter model list, keep only tool-capable models, and
+    /// publish them into the store. Blocking; call from a background thread. On
+    /// any failure the store is left untouched (empty) and the error is returned
+    /// for the caller to log.
+    pub fn fetch(self: *OpenRouterStore, gpa: std.mem.Allocator) !void {
+        var client = std.http.Client{ .allocator = gpa };
+        defer client.deinit();
+
+        var aw = std.Io.Writer.Allocating.init(gpa);
+        defer aw.deinit();
+
+        const result = try client.fetch(.{
+            .location = .{ .url = openrouter_url },
+            .method = .GET,
+            .response_writer = &aw.writer,
+        });
+
+        const body = aw.writer.buffer[0..aw.writer.end];
+        if (result.status != .ok) {
+            log.err("OpenRouter models fetch failed: HTTP {d}", .{@intFromEnum(result.status)});
+            return error.HttpRequestFailed;
+        }
+
+        const parsed = try std.json.parseFromSlice(std.json.Value, gpa, body, .{});
+        defer parsed.deinit();
+
+        const data = json_helpers.getField(parsed.value, "data") orelse return error.MissingData;
+        if (data != .array) return error.MissingData;
+
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+
+        var list: std.ArrayList(Model) = .{};
+
+        for (data.array.items) |item| {
+            const params = json_helpers.getField(item, "supported_parameters") orelse continue;
+            if (params != .array) continue;
+
+            var has_tools = false;
+            var has_reasoning = false;
+            for (params.array.items) |pv| {
+                if (pv != .string) continue;
+                if (std.mem.eql(u8, pv.string, "tools")) has_tools = true;
+                if (std.mem.eql(u8, pv.string, "reasoning")) has_reasoning = true;
+            }
+            if (!has_tools) continue;
+
+            const id = json_helpers.getStringField(item, "id") orelse continue;
+            const name = json_helpers.getStringField(item, "name") orelse id;
+            // orelse only catches a missing/null field; an explicit 0 must also
+            // fall back, since max_context is a divisor in App.onUsage.
+            const raw_ctx = json_helpers.getU64Field(item, "context_length") orelse 200_000;
+            const ctx_len: u64 = if (raw_ctx == 0) 200_000 else raw_ctx;
+            const max_ctx: u32 = if (ctx_len > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(ctx_len);
+
+            var is_free = false;
+            if (json_helpers.getObjectField(item, "pricing")) |pricing| {
+                const prompt = json_helpers.getStringField(pricing, "prompt") orelse "";
+                const completion = json_helpers.getStringField(pricing, "completion") orelse "";
+                is_free = std.mem.eql(u8, prompt, "0") and std.mem.eql(u8, completion, "0");
+            }
+
+            try list.append(a, .{
+                .id = try a.dupe(u8, id),
+                .display = try a.dupe(u8, name),
+                .free = is_free,
+                .supports_thinking = has_reasoning,
+                .max_context = max_ctx,
+            });
+        }
+
+        const ms = try list.toOwnedSlice(a);
+        log.info("OpenRouter: loaded {d} tool-capable models", .{ms.len});
+        self.publish(arena, ms);
+    }
+};
+
+pub var openrouter_store: OpenRouterStore = .{};
 
 pub fn findModel(id: []const u8) ?FindResult {
     for (&providers) |*p| {
@@ -77,7 +207,7 @@ pub fn findModel(id: []const u8) ?FindResult {
             if (std.mem.eql(u8, m.id, id)) return .{ .provider = p, .model = m };
         }
     }
-    return null;
+    return openrouter_store.find(id);
 }
 
 // === Tests ===

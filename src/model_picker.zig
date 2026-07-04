@@ -5,8 +5,6 @@ const modal_list = @import("modal_list.zig");
 
 const p = agent.llm.providers;
 
-const free_badge_fg: vaxis.Color = .{ .rgb = .{ 0x60, 0xCC, 0x60 } };
-
 // Re-export data types so existing callers don't need to change imports
 pub const Model = p.Model;
 pub const Provider = p.Provider;
@@ -63,6 +61,18 @@ pub const ModelPicker = struct {
                 try self.labels.append(alloc, try buildLabel(alloc, prov.name, m.id));
             }
         }
+
+        const or_prov = p.openrouter_store.provider();
+        for (p.openrouter_store.models()) |*m| {
+            const q = self.query.items;
+            const matches = q.len == 0 or
+                std.ascii.indexOfIgnoreCase(m.display, q) != null or
+                std.ascii.indexOfIgnoreCase(m.id, q) != null or
+                std.ascii.indexOfIgnoreCase(or_prov.name, q) != null;
+            if (!matches) continue;
+            try self.results.append(alloc, m);
+            try self.labels.append(alloc, try buildLabel(alloc, or_prov.name, m.id));
+        }
     }
 
     pub fn open(self: *ModelPicker, alloc: std.mem.Allocator) !void {
@@ -83,11 +93,19 @@ pub const ModelPicker = struct {
     pub fn render(self: *const ModelPicker, win: vaxis.Window, screen_w: u16, screen_h: u16) void {
         const max_items = 64;
         var items_buf: [max_items]modal_list.Item = undefined;
-        const n = @min(self.results.items.len, max_items);
-        for (self.results.items[0..n], 0..) |m, i| {
+
+        // The list can hold hundreds of entries (dynamic OpenRouter models), but
+        // `items_buf` caps at `max_items`. Pass a window that always contains
+        // `self.selected`, with a selected index relative to that window;
+        // modal_list scrolls within whatever slice it's given.
+        const total = self.results.items.len;
+        var start: usize = 0;
+        if (self.selected >= max_items) start = self.selected - max_items + 1;
+        const end = @min(total, start + max_items);
+        const n = end - start;
+        for (self.results.items[start..end], 0..) |_, i| {
             items_buf[i] = .{
-                .primary = self.labels.items[i],
-                .badge = if (m.free) modal_list.Badge{ .text = "Free", .fg = free_badge_fg } else null,
+                .primary = self.labels.items[start + i],
             };
         }
 
@@ -95,7 +113,7 @@ pub const ModelPicker = struct {
             .title = " Select model",
             .query = self.query.items,
             .items = items_buf[0..n],
-            .selected = self.selected,
+            .selected = self.selected - start,
             .max_width = 60,
             .max_height = 20,
         });

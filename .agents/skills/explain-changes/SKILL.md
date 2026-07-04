@@ -14,6 +14,11 @@ Be exhaustive. Analyze **every** code change in the scope, in detail, with the s
 context read from the actual files — never skim the diff and summarize. The reader should not
 have to open the diff themselves to fill in a gap you left.
 
+**Show the code, in context.** Don't just cite `file_path:line` and describe the change in
+prose — quote the actual changed code (with a few surrounding lines so it reads in context)
+in a fenced block, then explain it right underneath. The reader should see the code and its
+explanation together, without switching to the diff.
+
 ## When to use
 
 - "Explain this change / diff / commit / PR"
@@ -103,7 +108,38 @@ for the entire diff — every changed file and every hunk must be covered. Group
 (a function, a feature, a layer) so the narrative flows, but within each unit do not omit
 changes; if a unit contains several hunks, address each one.
 
-For each change explain:
+**Present each unit as code-then-explanation.** Lead with a fenced code block showing the
+actual code for that unit (read from the file, including enough surrounding lines to give
+context), then explain it directly beneath. Keep snippets tight — show the lines that matter
+plus a little context, not whole files; use `…` to elide unrelated lines. Prefix each block
+with the `file_path:line` it came from so the reader can click through *and* see the code.
+
+For a **modified** hunk, prefer a before/after pair so the change is visible, not just described:
+
+````
+`src/services/profile.ext:42` — before → after
+
+```diff
+- return store.readRaw(id)
++ const record = store.read(id) orelse return error.NotFound
++ return shape(record)
+```
+````
+
+For **new** code, show the added block as a plain fenced snippet in the file's language:
+
+````
+`src/services/profile.ext:1` (new)
+
+```ext
+fn create(input) {
+    validate(input)          // rejects empty / malformed
+    return store.insert(input)
+}
+```
+````
+
+Then, under the code, explain:
 - **What it does**, in plain language — the actual behavior, read from the surrounding code,
   not paraphrased from the diff.
 - **Why it's needed** / what problem it solves, and how it fits the larger change.
@@ -111,11 +147,10 @@ For each change explain:
   so the reader sees the ripple effects, not an isolated line.
 - **Any subtlety**: edge cases, error paths, assumptions, concurrency, performance, security,
   backward compatibility.
-- Reference code as `file_path:line` so the reader can click through.
 
-Match the depth to the change: a large or risky hunk gets a thorough treatment; a one-line
-config flip gets a sentence — but it still gets covered. Never collapse multiple distinct
-changes into a vague "and various other updates."
+Match the depth to the change: a large or risky hunk gets a thorough treatment with its code
+shown; a one-line config flip gets its single line quoted plus a sentence — but it still gets
+covered. Never collapse multiple distinct changes into a vague "and various other updates."
 
 ### 4. Diagrams (ASCII)
 Always include at least one diagram. Pick the type(s) that fit the change — see the diagram
@@ -210,6 +245,10 @@ record  (NEW)
 
 - **Cover the entire diff.** Every changed file and every hunk gets analyzed; nothing is
   silently dropped. Scale the depth to the change, but never the coverage.
+- **Show the code in context.** Quote the actual changed code (tight snippets with a little
+  surrounding context, elide with `…`) in fenced blocks, code-then-explanation — don't rely on
+  `file_path:line` citations alone. Use `diff` blocks for modified hunks, language-tagged
+  blocks for new code.
 - **Always render at least one diagram**, in a fenced code block, pure ASCII/Unicode.
 - Match the diagram type to the change; use multiple if it genuinely helps (e.g. a sequence
   diagram + a schema diff for a new endpoint backed by a new table).

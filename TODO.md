@@ -11,7 +11,8 @@
 [x] - render attached text files preview in panel
 [x] - when ctrl-c or quit,  show option to resume latess conver
 [] - only show models that have api key configured
-[] - add logout opton
+[] - remove orange for text TUI response
+[x] - add logout opton
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json
 [] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
@@ -20,7 +21,7 @@
 [x] - add prompt queue
 [x] - when ask appears ,  stop count seconds
 [] - if file changes after session start,  check and read again
-[] - when comamnds is open show count (1/20)
+[x] - when comamnds is open show count (1/20)
 [x] - add option to press tab an autocmplete command
 [x] - show trust message before start
 [] - option to hide think
