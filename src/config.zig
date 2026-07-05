@@ -344,26 +344,23 @@ pub const ConfigStore = struct {
     }
 };
 
-fn configDir(allocator: std.mem.Allocator) ![]const u8 {
+pub fn configDir(allocator: std.mem.Allocator) ![]const u8 {
     const home = try utils.homeDir(allocator);
     defer allocator.free(home);
     return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig" });
 }
 
 fn configPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home = try utils.homeDir(allocator);
-    defer allocator.free(home);
-    return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "config.json" });
+    const dir = try configDir(allocator);
+    defer allocator.free(dir);
+    return std.fs.path.join(allocator, &.{ dir, "config.json" });
 }
 
 fn ensureConfigExists(allocator: std.mem.Allocator) !void {
     const dir_path = try configDir(allocator);
     defer allocator.free(dir_path);
 
-    std.fs.makeDirAbsolute(dir_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std.fs.cwd().makePath(dir_path);
 
     const path = try configPath(allocator);
     defer allocator.free(path);

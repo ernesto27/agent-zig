@@ -8,12 +8,14 @@ pub const Logger = struct {
     const filename = "agent.log";
 
     pub fn init(allocator: std.mem.Allocator) !void {
-        const home = try agent.utils.homeDir(allocator);
-        defer allocator.free(home);
-        const path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", filename });
+        const dir = try agent.config.configDir(allocator);
+        defer allocator.free(dir);
+        try std.fs.cwd().makePath(dir);
+
+        const path = try std.fs.path.join(allocator, &.{ dir, filename });
         defer allocator.free(path);
 
-        const crash_path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "crash.log" });
+        const crash_path = try std.fs.path.join(allocator, &.{ dir, "crash.log" });
         defer allocator.free(crash_path);
         if (crash_path.len > crash_log_path_buf.len) return error.NameTooLong;
         @memcpy(crash_log_path_buf[0..crash_path.len], crash_path);
