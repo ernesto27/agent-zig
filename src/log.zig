@@ -1,4 +1,5 @@
 const std = @import("std");
+const agent = @import("agent");
 
 pub const Logger = struct {
     var file: ?std.fs.File = null;
@@ -7,7 +8,8 @@ pub const Logger = struct {
     const filename = "agent.log";
 
     pub fn init(allocator: std.mem.Allocator) !void {
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        const home = try agent.utils.homeDir(allocator);
+        defer allocator.free(home);
         const path = try std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", filename });
         defer allocator.free(path);
 

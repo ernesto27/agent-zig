@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 
 const log = std.log.scoped(.sandbox);
 
@@ -33,7 +34,8 @@ pub const Sandbox = struct {
     /// contents of `repo_path` into /workspace (no bind mount → host untouched).
     /// Sets `active = true` on success; on error nothing is left running.
     pub fn start(self: *Self, alloc: std.mem.Allocator, image: []const u8, repo_path: []const u8) !void {
-        const home = std.posix.getenv("HOME") orelse return error.NoHomeEnv;
+        const home = utils.homeDir(alloc) catch return error.NoHomeEnv;
+        defer alloc.free(home);
         const repo = std.fs.path.basename(repo_path);
         const ts = std.time.timestamp();
 

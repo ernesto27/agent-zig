@@ -3,7 +3,8 @@
 //! extract the binary, install to ~/.local/bin via an atomic rename.
 const std = @import("std");
 const builtin = @import("builtin");
-const build_info = @import("agent").build;
+const agent = @import("agent");
+const build_info = agent.build;
 
 const repo = "ernesto27/agent-zig";
 const binary = "agent-zig";
@@ -49,7 +50,8 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const tgz_bytes = tgz_aw.written();
 
     // 4. Resolve install paths.
-    const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+    const home = try agent.utils.homeDir(allocator);
+    defer allocator.free(home);
     const dir = try std.fs.path.join(allocator, &.{ home, ".local", "bin" });
     defer allocator.free(dir);
     std.fs.makeDirAbsolute(dir) catch |err| switch (err) {
@@ -75,7 +77,8 @@ pub fn run(allocator: std.mem.Allocator) !void {
     std.debug.print("\n{s} installed to {s}\n", .{ binary, final_path });
 
     // 6. PATH hint.
-    const path_env = std.posix.getenv("PATH") orelse "";
+    var path_env_buf: [4096]u8 = undefined;
+    const path_env = agent.utils.getEnvBuf(&path_env_buf, "PATH") orelse "";
     if (!onPath(path_env, dir)) {
         std.debug.print("\n  Add this to your shell profile:\n", .{});
         std.debug.print("    export PATH=\"$HOME/.local/bin:$PATH\"\n", .{});

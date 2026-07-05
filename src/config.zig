@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 const log = std.log.scoped(.config);
 
 pub const Effort = enum {
@@ -145,9 +146,11 @@ const apiKeyEnvVars = std.StaticStringMap([]const u8).initComptime(.{
 /// If the provider has a corresponding *_API_KEY env var, return its value
 /// (non-empty). Returns null when the var is not set, empty, or the provider
 /// isn't mapped yet.
+var env_api_key_buf: [512]u8 = undefined;
+
 pub fn envApiKey(provider_name: []const u8) ?[]const u8 {
     const env_var = apiKeyEnvVars.get(provider_name) orelse return null;
-    const key = std.posix.getenv(env_var) orelse return null;
+    const key = utils.getEnvBuf(&env_api_key_buf, env_var) orelse return null;
     if (key.len == 0) return null;
     return key;
 }
@@ -342,12 +345,14 @@ pub const ConfigStore = struct {
 };
 
 fn configDir(allocator: std.mem.Allocator) ![]const u8 {
-    const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+    const home = try utils.homeDir(allocator);
+    defer allocator.free(home);
     return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig" });
 }
 
 fn configPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+    const home = try utils.homeDir(allocator);
+    defer allocator.free(home);
     return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "config.json" });
 }
 

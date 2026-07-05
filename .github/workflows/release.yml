@@ -21,10 +21,17 @@ jobs:
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       - run: tar -czf agent-zig-linux-x86_64.tar.gz -C dist/linux/bin agent-zig
 
+      - run: zig build -Dtarget=x86_64-windows -Doptimize=ReleaseFast -Dtavily-api-key="$TAVILY_API_KEY" --prefix dist/windows
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      - run: zip -j agent-zig-windows-x86_64.zip dist/windows/bin/agent-zig.exe
+
       - uses: marvinpinto/action-automatic-releases@latest
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           automatic_release_tag: ${{ github.ref_name }}
           prerelease: false
           title: "Release ${{ github.ref_name }}"
-          files: agent-zig-linux-x86_64.tar.gz
+          files: |
+            agent-zig-linux-x86_64.tar.gz
+            agent-zig-windows-x86_64.zip

@@ -13,3 +13,4 @@ jobs:
         with:
           version: 0.15.2
       - run: zig build test
+      - run: zig build -Dtarget=x86_64-windows

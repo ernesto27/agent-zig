@@ -641,7 +641,7 @@ pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_o
                 if (th.is_header) {
                     _ = chat_win.printSegment(.{
                         .text = "Thinking:",
-                        .style = .{ .fg = .{ .rgb = .{ 0xCC, 0x80, 0x30 } }, .italic = true, .bold = true },
+                        .style = .{ .fg = .{ .rgb = .{ 0x55, 0x55, 0x55 } }, .italic = true, .bold = true },
                     }, .{ .row_offset = row, .col_offset = 2 });
                 } else if (th.text.len > 0) {
                     _ = chat_win.printSegment(.{

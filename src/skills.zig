@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("utils.zig");
 
 const log = std.log.scoped(.skills);
 
@@ -30,7 +31,8 @@ pub const Registry = struct {
     skills_home_path: []u8,
 
     pub fn init(allocator: std.mem.Allocator) !Registry {
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        const home = try utils.homeDir(allocator);
+        errdefer allocator.free(home);
         const path = try std.fs.path.join(allocator, &.{ home, skills_root });
         return .{ .home = home, .skills_home_path = path };
     }
@@ -38,6 +40,7 @@ pub const Registry = struct {
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
         for (self.skills.items) |*skill| skill.deinit(allocator);
         self.skills.deinit(allocator);
+        allocator.free(self.home);
         allocator.free(self.skills_home_path);
     }
 

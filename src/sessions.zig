@@ -156,7 +156,8 @@ pub const Sessions = struct {
     }
 
     fn sessionsDir(allocator: std.mem.Allocator) ![]const u8 {
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        const home = try agent.utils.homeDir(allocator);
+        defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".config", "agent-zig", "sessions" });
     }
 
