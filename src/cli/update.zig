@@ -6,6 +6,8 @@ const builtin = @import("builtin");
 const agent = @import("agent");
 const build_info = agent.build;
 
+const log = std.log.scoped(.update);
+
 const repo = "ernesto27/agent-zig";
 const binary = "agent-zig";
 const asset = "agent-zig-linux-x86_64.tar.gz";
@@ -117,7 +119,7 @@ fn fetchLatestRelease(allocator: std.mem.Allocator) !std.json.Parsed(std.json.Va
         .response_writer = &api_aw.writer,
     });
     if (api_res.status != .ok) {
-        std.debug.print("error: GitHub API returned HTTP {d}\n", .{@intFromEnum(api_res.status)});
+        log.warn("GitHub API returned HTTP {d}", .{@intFromEnum(api_res.status)});
         return error.HttpRequestFailed;
     }
 
