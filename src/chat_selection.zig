@@ -11,7 +11,6 @@ pub const ChatRenderCache = struct {
     lines: ?[]RenderedLine = null,
     width: u16 = 0,
     width_method: WidthMethod = undefined,
-    show_thinking: bool = false,
     signature: u64 = 0,
     valid: bool = false,
 };
@@ -218,12 +217,10 @@ fn wrapText(text: []const u8, width: usize, comptime max_lines: usize) [max_line
 pub fn renderedLinesCached(app: *App, chat_width: u16, width_method: WidthMethod) ![]RenderedLine {
     const cache = &app.chat_render_cache;
     const sig = chatSignature(app);
-    const show_thinking = app.config_store.cfg.settings.showThinkingBlock;
 
     if (cache.valid and cache.lines != null and
         cache.width == chat_width and
         cache.width_method == width_method and
-        cache.show_thinking == show_thinking and
         cache.signature == sig)
     {
         return cache.lines.?;
@@ -234,7 +231,6 @@ pub fn renderedLinesCached(app: *App, chat_width: u16, width_method: WidthMethod
     cache.lines = lines;
     cache.width = chat_width;
     cache.width_method = width_method;
-    cache.show_thinking = show_thinking;
     cache.signature = sig;
     cache.valid = true;
     return lines;
@@ -290,33 +286,31 @@ pub fn buildRenderedLines(
                 } },
             });
 
-            if (app.config_store.cfg.settings.showThinkingBlock) {
-                if (msg.thinking) |th| {
-                    // "Thinking:" header
+            if (msg.thinking) |th| {
+                // "Thinking:" header
+                try lines.append(allocator, .{
+                    .text = "Thinking:",
+                    .display_cols = displayWidth("Thinking:", width_method),
+                    .entry = .{ .thinking = .{ .text = "Thinking:", .is_header = true } },
+                });
+                // Wrapped thinking content
+                const wrap_w = if (chat_width > 4) chat_width - 4 else 10;
+                const wrapped = wrapText(th, wrap_w, 512);
+                for (wrapped) |maybe_line| {
+                    const line = maybe_line orelse break;
+                    const rendered = try allocator.dupe(u8, line);
                     try lines.append(allocator, .{
-                        .text = "Thinking:",
-                        .display_cols = displayWidth("Thinking:", width_method),
-                        .entry = .{ .thinking = .{ .text = "Thinking:", .is_header = true } },
-                    });
-                    // Wrapped thinking content
-                    const wrap_w = if (chat_width > 4) chat_width - 4 else 10;
-                    const wrapped = wrapText(th, wrap_w, 512);
-                    for (wrapped) |maybe_line| {
-                        const line = maybe_line orelse break;
-                        const rendered = try allocator.dupe(u8, line);
-                        try lines.append(allocator, .{
-                            .text = rendered,
-                            .display_cols = displayWidth(rendered, width_method),
-                            .entry = .{ .thinking = .{ .text = line, .is_header = false } },
-                        });
-                    }
-                    // Blank separator before response
-                    try lines.append(allocator, .{
-                        .text = "",
-                        .display_cols = 0,
-                        .entry = .{ .thinking = .{ .text = "", .is_header = false } },
+                        .text = rendered,
+                        .display_cols = displayWidth(rendered, width_method),
+                        .entry = .{ .thinking = .{ .text = line, .is_header = false } },
                     });
                 }
+                // Blank separator before response
+                try lines.append(allocator, .{
+                    .text = "",
+                    .display_cols = 0,
+                    .entry = .{ .thinking = .{ .text = "", .is_header = false } },
+                });
             }
 
             const styled = app.getStyledLines(msg) catch &.{};

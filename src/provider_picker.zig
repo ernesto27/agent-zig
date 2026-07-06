@@ -1,7 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
-const modal_list = @import("modal_list.zig");
+const modal_list = agent.modal_list;
 const p = agent.llm.providers;
 
 pub const Phase = enum { list, key_input };

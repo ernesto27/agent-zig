@@ -7,7 +7,7 @@ pub const SKILL_PREFIX = "skills:";
 const COUNTER_BUF_LEN = 32;
 const COUNTER_FG = vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } };
 
-pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, skills, rename, sandbox, export_session, exit, logout };
+pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, skills, rename, sandbox, export_session, settings, exit, logout };
 
 pub const Command = struct {
     name: []const u8,
@@ -28,6 +28,7 @@ pub const commands = [_]Command{
     .{ .name = "rename", .description = "Rename current session", .action = .rename },
     .{ .name = "sandbox", .description = "Toggle Docker sandbox", .action = .sandbox },
     .{ .name = "export", .description = "Export conversation to HTML", .action = .export_session },
+    .{ .name = "settings", .description = "Open settings", .action = .settings },
     .{ .name = "exit", .description = "Exit the application", .action = .exit },
     .{ .name = "logout", .description = "Remove provider authenticacion", .action = .logout },
 };

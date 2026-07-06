@@ -1,7 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
-const modal_list = @import("modal_list.zig");
+const modal_list = agent.modal_list;
 
 const enabled_fg: vaxis.Color = .{ .rgb = .{ 0x60, 0xCC, 0x60 } };
 const disabled_fg: vaxis.Color = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const settings = @import("commands/settings.zig");
 const log = std.log.scoped(.config);
 
 pub const Effort = enum {
@@ -118,8 +119,6 @@ pub const McpServerConfig = struct {
     headers: HttpHeaders = .{},
 };
 
-pub const Settings = struct { showThinkingBlock: bool = true };
-
 /// The whole `mcpServers` block: a name-keyed map of server configs, matching
 /// the JSON object `{ "<name>": { ... } }`. Iterate via `.map`.
 pub const McpServers = std.json.ArrayHashMap(McpServerConfig);
@@ -130,8 +129,8 @@ pub const Config = struct {
     sessions: []const SessionEntry = &.{},
     trustedFolders: []const TrustedFolder = &.{},
     mcpServers: McpServers = .{},
-    settings: Settings = .{},
     dockerImage: []const u8 = "ubuntu:24.04",
+    settings: settings.Settings = .{},
 };
 
 pub fn isTrusted(folders: []const TrustedFolder, cwd: []const u8) bool {
@@ -231,7 +230,7 @@ pub const ConfigStore = struct {
     /// (`[]u8`, `[:0]const u8`, a literal) — `dupe` handles the coercion.
     /// `field` is a pointer to the target field, e.g.:
     ///   try store.set(&store.cfg.dockerImage, "node:20");            // duped
-    ///   try store.set(&store.cfg.settings.showThinkingBlock, true);  // by value
+    ///   try store.set(&store.cfg.settings.showThinking.status, true); // by value
     pub fn set(self: *ConfigStore, field: anytype, value: anytype) !void {
         const Field = @typeInfo(@TypeOf(field)).pointer.child;
         if (Field == []const u8) {

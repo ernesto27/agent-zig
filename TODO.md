@@ -14,6 +14,7 @@
 [x] - remove orange in thining
 [x] - remove orange for text TUI response
 [x] - add logout opton
+[] - skill promt message does not queues
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json
 [] - test in windows

@@ -7,6 +7,7 @@ const messages_mod = @import("messages.zig");
 const compact_mod = @import("commands/compact.zig");
 const init_mod = @import("commands/init.zig");
 const export_mod = @import("commands/export.zig");
+const settings_mod = agent.settings;
 const mode_mod = @import("mode.zig");
 const agent_loop = @import("agent_loop.zig");
 const image_attach = @import("image_attach.zig");
@@ -91,6 +92,7 @@ pub const App = struct {
     sessions: sessions.Sessions = .{},
     init_cmd: init_mod.Init = .{},
     compact_mod: compact_mod.Compact = .{},
+    settings: settings_mod.Settings = .{},
     mutex: std.Thread.Mutex = .{},
     loading: LoadingState = .{},
     needs_redraw: bool = true,
@@ -147,6 +149,7 @@ pub const App = struct {
             .system_prompt = sp,
             .sessions = sess,
             .config_store = config,
+            .settings = settings_mod.Settings.init(config.cfg.settings),
         };
     }
 
@@ -451,8 +454,10 @@ pub const App = struct {
     pub fn onThinkingChunk(self: *Self, chunk: []const u8) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         const last = self.messages.lastAssistant() orelse return;
+
+        if (!self.settings.showThinking.status) return;
+
         if (last.thinking) |existing| {
             const new_thinking = std.mem.concat(self.alloc, u8, &.{ existing, chunk }) catch return;
             self.alloc.free(existing);

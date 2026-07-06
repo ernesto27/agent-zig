@@ -89,6 +89,7 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
             ctx.logout_picker.active or
             ctx.mcp_picker.active or
             ctx.skills_picker.active or
+            ctx.app.settings.active or
             ctx.app.sessions.active or
             ctx.app.sessions.rename_active;
         if (!modal_open) ctx.app.toggleMode();
@@ -113,6 +114,15 @@ pub fn handleKey(ctx: *InputContext, key: vaxis.Key) !bool {
     } else if (key.matches(' ', .{}) and ctx.skills_picker.active) {
         try ctx.skills_picker.toggleSelected(ctx.alloc);
         try ctx.command_picker.updateFromInput(ctx.alloc, ctx.input.items);
+        ctx.app.needs_redraw = true;
+    } else if (key.matches(' ', .{}) and ctx.app.settings.active) {
+        ctx.app.settings.toggleSelected();
+        ctx.config.set(&ctx.config.cfg.settings, ctx.app.settings) catch |err| {
+            log.err("failed to persist settings: {}", .{err});
+        };
+        ctx.app.needs_redraw = true;
+    } else if ((key.matches('\r', .{}) or key.matches('\n', .{})) and ctx.app.settings.active) {
+        ctx.app.settings.reset();
         ctx.app.needs_redraw = true;
     } else if (key.text) |txt| {
         try handleTextInput(ctx, txt);
@@ -280,6 +290,7 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
             try ctx.app.exportCMD();
             return .none;
         },
+        .settings => ctx.app.settings.open(),
         .exit => return .quit,
         .logout => ctx.logout_picker.open(ctx.config.cfg.providers.authenticated()),
     }
@@ -305,6 +316,8 @@ fn handleEscape(ctx: *InputContext) !void {
         if (!ctx.mcp_picker.backOrClose()) ctx.mcp_picker.reset();
     } else if (ctx.skills_picker.active) {
         ctx.skills_picker.reset();
+    } else if (ctx.app.settings.active) {
+        ctx.app.settings.reset();
     } else if (ctx.app.sessions.rename_active) {
         ctx.app.sessions.resetRename();
     } else if (ctx.app.sessions.active) {
@@ -338,6 +351,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                 ctx.mcp_picker.moveUp();
             } else if (ctx.skills_picker.active) {
                 ctx.skills_picker.moveUp();
+            } else if (ctx.app.settings.active) {
+                ctx.app.settings.moveUp();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected > 0) {
                     ctx.app.sessions.selected -= 1;
@@ -382,6 +397,8 @@ fn handleArrow(ctx: *InputContext, dir: ArrowDir) !void {
                 ctx.mcp_picker.moveDown();
             } else if (ctx.skills_picker.active) {
                 ctx.skills_picker.moveDown();
+            } else if (ctx.app.settings.active) {
+                ctx.app.settings.moveDown();
             } else if (ctx.app.sessions.active) {
                 if (ctx.app.sessions.selected + 1 < ctx.app.sessions.entries.items.len) {
                     ctx.app.sessions.selected += 1;

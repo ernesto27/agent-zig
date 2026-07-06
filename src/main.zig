@@ -533,6 +533,10 @@ pub fn main() !void {
             skills_picker.render(win, vx.screen.width, vx.screen.height);
         }
 
+        if (app.settings.active) {
+            app.settings.render(win, vx.screen.width, vx.screen.height);
+        }
+
         if (trust_dialog.active) {
             trust_dialog.render(win, vx.screen.width, vx.screen.height);
         }

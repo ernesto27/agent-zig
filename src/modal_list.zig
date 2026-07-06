@@ -1,6 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const agent = @import("agent");
+const utils = @import("utils.zig");
 
 pub const Badge = struct {
     text: []const u8,
@@ -131,7 +131,7 @@ pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) vo
         if (it.secondary) |sec| {
             if (sec.len > 0 and secondary_col < inner_w -| 1) {
                 const max_sec_w: usize = @as(usize, inner_w) -| secondary_col -| 1;
-                const text = agent.utils.truncate(sec, max_sec_w, 1);
+                const text = utils.truncate(sec, max_sec_w, 1);
                 _ = modal.printSegment(.{
                     .text = text,
                     .style = .{ .fg = fg_secondary, .bg = bg },
