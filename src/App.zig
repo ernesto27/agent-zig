@@ -225,12 +225,16 @@ pub const App = struct {
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });
     }
 
-    pub fn skillCMD(self: *Self, skill_name: []const u8) !void {
-        const prompt = try std.fmt.allocPrint(
-            self.alloc,
+    pub fn buildSkillPrompt(alloc: std.mem.Allocator, skill_name: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(
+            alloc,
             "Use the `skill` tool to load and apply the `{s}` skill for this conversation.",
             .{skill_name},
         );
+    }
+
+    pub fn skillCMD(self: *Self, skill_name: []const u8) !void {
+        const prompt = try buildSkillPrompt(self.alloc, skill_name);
         errdefer self.alloc.free(prompt);
 
         try self.messages.append(self.alloc, .{ .role = .user, .content = prompt });

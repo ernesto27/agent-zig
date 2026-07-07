@@ -114,11 +114,11 @@ pub const CommandPicker = struct {
         return query.len == 0 or std.ascii.indexOfIgnoreCase(name, query) != null;
     }
 
-    pub fn render(self: *CommandPicker, win: vaxis.Window, screen_w: u16, input_y: u16) void {
+    pub fn render(self: *CommandPicker, win: vaxis.Window, screen_w: u16, anchor_y: u16) void {
         const n: u16 = @intCast(@min(self.results.items.len, MAX_RESULTS));
         const start: usize = if (self.selected < n) 0 else self.selected - n + 1;
         const picker_h: u16 = n + 2;
-        const picker_y: u16 = if (input_y >= picker_h) input_y - picker_h else 0;
+        const picker_y: u16 = if (anchor_y >= picker_h) anchor_y - picker_h else 0;
         const picker = win.child(.{
             .x_off = 0,
             .y_off = picker_y,

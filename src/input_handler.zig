@@ -534,18 +534,17 @@ pub fn handleEnter(ctx: *InputContext) !bool {
                     cmd.name[command_picker_mod.SKILL_PREFIX.len..]
                 else
                     cmd.name;
-                if (ctx.app.skill_registry.find(bare_name)) |skill| {
+                if (ctx.app.skill_registry.find(bare_name)) |_| {
                     if (!ctx.app.loading.active) {
-                        if (!skill.enabled) {
-                            clearInput(ctx);
-                            const notice = try std.fmt.allocPrint(alloc, "Skill \"{s}\" is disabled", .{bare_name});
-                            defer alloc.free(notice);
-                            ctx.app.appendNotice(notice);
-                        } else {
-                            clearInput(ctx);
-                            try ctx.app.skillCMD(bare_name);
-                            result = .send;
-                        }
+                        try ctx.app.skillCMD(bare_name);
+                        clearInput(ctx);
+                        result = .send;
+                    } else {
+                        // LLM is busy — queue the skill invocation so it runs on the next turn.
+                        const prompt = try App.buildSkillPrompt(alloc, bare_name);
+                        defer alloc.free(prompt);
+                        try ctx.app.message_queue.enqueue(alloc, prompt);
+                        clearInput(ctx);
                     }
                 }
             }

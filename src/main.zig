@@ -507,7 +507,8 @@ pub fn main() !void {
         }
 
         if (command_picker.active and command_picker.results.items.len > 0) {
-            command_picker.render(win, vx.screen.width, layout.input_y);
+            const picker_anchor = if (layout.queue_h > 0) layout.queue_y else layout.input_y;
+            command_picker.render(win, vx.screen.width, picker_anchor);
         }
 
         // /model picker overlay
