@@ -541,7 +541,7 @@ pub fn handleEnter(ctx: *InputContext) !bool {
                         result = .send;
                     } else {
                         // LLM is busy — queue the skill invocation so it runs on the next turn.
-                        const prompt = try App.buildSkillPrompt(alloc, bare_name);
+                        const prompt = try agent.skills.buildSkillPrompt(alloc, bare_name);
                         defer alloc.free(prompt);
                         try ctx.app.message_queue.enqueue(alloc, prompt);
                         clearInput(ctx);

@@ -136,6 +136,14 @@ pub const OpenRouterStore = struct {
             .location = .{ .url = openrouter_url },
             .method = .GET,
             .response_writer = &aw.writer,
+            // An explicitly-empty decompress buffer forces std's flate
+            // Decompress onto its "direct" path (decompresses straight into the
+            // growing Allocating writer). The default path allocates a window
+            // buffer and takes the "indirect" path, whose internal writer has an
+            // unreachableRebase vtable that panics ("reached unreachable code")
+            // on gzip responses whose window fills mid-stream — e.g. OpenRouter's
+            // /api/v1/models.
+            .decompress_buffer = &.{},
         });
 
         const body = aw.writer.buffer[0..aw.writer.end];

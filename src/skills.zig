@@ -8,6 +8,14 @@ const skill_file_name = "SKILL.md";
 const max_skill_bytes = 512 * 1024;
 const max_resource_bytes = 1024 * 1024;
 
+pub fn buildSkillPrompt(alloc: std.mem.Allocator, skill_name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(
+        alloc,
+        "Use the `skill` tool to load and apply the `{s}` skill for this conversation.",
+        .{skill_name},
+    );
+}
+
 pub const Skill = struct {
     name: []const u8,
     description: []const u8,

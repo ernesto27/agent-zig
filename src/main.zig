@@ -29,11 +29,12 @@ const app_version = agent.build.version;
 
 const log = std.log.scoped(.main);
 
-const Command = enum { print, session };
+const Command = enum { print, session, skillsLoad };
 
 fn parseCommand(cmd: []const u8) ?Command {
     if (std.mem.eql(u8, cmd, "-p") or std.mem.eql(u8, cmd, "--print")) return .print;
     if (std.mem.eql(u8, cmd, "-s") or std.mem.eql(u8, cmd, "--session")) return .session;
+    if (std.mem.eql(u8, cmd, "-skills-load")) return .skillsLoad;
     return null;
 }
 
@@ -92,11 +93,17 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    try log_mod.Logger.init(alloc);
+    defer log_mod.Logger.deinit();
+
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
     var first_message: ?[]const u8 = null;
     var session_name: ?[]const u8 = null;
+    var skill_names: std.ArrayList([]const u8) = .empty;
+    defer skill_names.deinit(alloc);
+
     if (args.len > 1) {
         const cmd = args[1];
         const arg = if (args.len > 2) args[2] else "";
@@ -107,15 +114,18 @@ pub fn main() !void {
                 return;
             },
             .session => session_name = arg,
+            .skillsLoad => {
+                for (args[2..]) |skill_name| {
+                    try skill_names.append(alloc, skill_name);
+                    log.info("loading skill: {s}", .{skill_name});
+                }
+            },
         } else if (cli.dispatch(alloc, cmd)) {
             return;
         } else {
             first_message = cmd;
         }
     }
-
-    try log_mod.Logger.init(alloc);
-    defer log_mod.Logger.deinit();
 
     var config_store = agent.config.ConfigStore.init(alloc) catch {
         std.debug.print("Failed to load config. Create ~/.config/agent-zig/config.json\n", .{});
@@ -603,6 +613,20 @@ pub fn main() !void {
                 _ = input_handler.handleEnter(&ctx) catch |err| {
                     log.err("failed to submit first message: {}", .{err});
                 };
+            }
+        }
+
+        //  load skills at startup
+        if (skill_names.items.len > 0) {
+            if (!trust_dialog.active) {
+                for (skill_names.items) |name| {
+                    const prompt = try agent.skills.buildSkillPrompt(alloc, name);
+                    defer alloc.free(prompt);
+                    try ctx.input.appendSlice(alloc, prompt);
+                    ctx.cursor_pos = ctx.input.items.len;
+                    _ = try input_handler.handleEnter(&ctx);
+                }
+                skill_names.clearRetainingCapacity();
             }
         }
     }

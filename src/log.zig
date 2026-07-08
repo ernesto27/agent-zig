@@ -8,6 +8,10 @@ pub const Logger = struct {
     const filename = "agent.log";
 
     pub fn init(allocator: std.mem.Allocator) !void {
+        // Close any previously opened file so re-init (e.g. one-shot CLI paths
+        // that init the logger again) doesn't leak the prior descriptor.
+        deinit();
+
         const dir = try agent.config.configDir(allocator);
         defer allocator.free(dir);
         try std.fs.cwd().makePath(dir);
