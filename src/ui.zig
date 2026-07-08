@@ -465,9 +465,9 @@ pub fn loading(elapsed_secs: usize) []const u8 {
     const seconds = elapsed_secs % 60;
 
     const result = if (minutes == 0)
-        std.fmt.bufPrint(&loading_buf, "{s}  {d}s ", .{ frame, elapsed_secs }) catch return frame
+        std.fmt.bufPrint(&loading_buf, "{s} {d}s ", .{ frame, elapsed_secs }) catch return frame
     else
-        std.fmt.bufPrint(&loading_buf, "{s}  {d}m {d}s ", .{ frame, minutes, seconds }) catch return frame;
+        std.fmt.bufPrint(&loading_buf, "{s} {d}m {d}s ", .{ frame, minutes, seconds }) catch return frame;
     return result;
 }
 
