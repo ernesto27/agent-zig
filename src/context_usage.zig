@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const palette = @import("theme");
 
 pub const contextUsage = struct {
     tokensCount: u32 = 0,
@@ -11,7 +12,7 @@ pub const contextUsage = struct {
         const decimal = (self.tokensCount % 1000) / 100;
         const text = std.fmt.bufPrint(&self.buf, "  {d}.{d}K ({d}%)", .{ whole, decimal, self.tokensPercentage }) catch return;
         _ = win.printSegment(
-            .{ .text = text, .style = .{ .bg = bg, .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } } },
+            .{ .text = text, .style = .{ .bg = bg, .fg = palette.dim } },
             .{ .row_offset = row, .col_offset = col_offset },
         );
     }

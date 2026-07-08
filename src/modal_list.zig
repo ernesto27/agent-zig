@@ -1,6 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const utils = @import("utils.zig");
+const palette = @import("theme");
 
 pub const Badge = struct {
     text: []const u8,
@@ -25,11 +26,11 @@ pub const Options = struct {
     max_height: u16 = 20,
 };
 
-const fg_default: vaxis.Color = .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
-const fg_selected: vaxis.Color = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } };
-const fg_muted: vaxis.Color = .{ .rgb = .{ 0x88, 0x88, 0x88 } };
-const fg_muted_on_sel: vaxis.Color = .{ .rgb = .{ 0x5A, 0x9E, 0xA8 } };
-const fg_placeholder: vaxis.Color = .{ .rgb = .{ 0x66, 0x66, 0x66 } };
+const fg_default = palette.bright;
+const fg_selected = palette.cyan;
+const fg_muted = palette.dim;
+const fg_muted_on_sel = palette.teal;
+const fg_placeholder = palette.faint;
 
 pub fn render(win: vaxis.Window, screen_w: u16, screen_h: u16, opts: Options) void {
     const has_query = opts.query != null;

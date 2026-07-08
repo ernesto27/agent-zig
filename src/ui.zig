@@ -10,6 +10,8 @@ const code_modal = @import("code_modal.zig");
 const Event = vaxis.Event;
 const EventLoop = vaxis.Loop(Event);
 
+const palette = @import("theme");
+
 pub const SpinnerState = struct {
     generation: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
@@ -189,7 +191,7 @@ pub fn renderInput(
     if (show_prompt) {
         _ = input_win.printSegment(.{
             .text = prompt,
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+            .style = .{ .fg = palette.muted, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 1 });
         prompt_width = @intCast(prompt.len);
 
@@ -207,8 +209,8 @@ pub fn renderInput(
             buf_off += chip.len;
             if (is_image) image_idx += 1 else file_idx += 1;
             const chip_style: vaxis.Style = if (is_image) .{
-                .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
-                .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+                .fg = palette.black,
+                .bg = palette.accent,
                 .bold = true,
             } else .{};
             const r = input_win.printSegment(.{
@@ -456,23 +458,23 @@ var loading_buf: [32]u8 = undefined;
 var chip_buf: [512]u8 = undefined;
 
 pub fn loading(elapsed_secs: usize) []const u8 {
-    const frames = [_][]const u8{ "[=   ] ", "[==  ] ", "[=== ] ", "[ ===] ", "[  ==] ", "[   =] " };
+    const frames = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
     const now_ms: u64 = @intCast(std.time.milliTimestamp());
     const frame = frames[(now_ms / 120) % frames.len];
     const minutes = elapsed_secs / 60;
     const seconds = elapsed_secs % 60;
 
     const result = if (minutes == 0)
-        std.fmt.bufPrint(&loading_buf, "{s}({d}s) ", .{ frame, elapsed_secs }) catch return frame
+        std.fmt.bufPrint(&loading_buf, "{s}  {d}s ", .{ frame, elapsed_secs }) catch return frame
     else
-        std.fmt.bufPrint(&loading_buf, "{s}({d}m {d}s) ", .{ frame, minutes, seconds }) catch return frame;
+        std.fmt.bufPrint(&loading_buf, "{s}  {d}m {d}s ", .{ frame, minutes, seconds }) catch return frame;
     return result;
 }
 
 pub fn renderShowLoading(win: vaxis.Window, app: *App, loading_y: u16) void {
     _ = win.printSegment(.{
         .text = loading(app.loading.elapsed() orelse 0),
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
+        .style = .{ .fg = palette.spinner },
     }, .{ .row_offset = loading_y, .col_offset = 1 });
 }
 
@@ -503,11 +505,11 @@ pub fn renderHeader(win: vaxis.Window, cwd: []const u8) void {
     const title = " Zigent - AI Coding Agent ";
     _ = win.printSegment(.{
         .text = title,
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = palette.white, .bold = true },
     }, .{ .row_offset = 0, .col_offset = 0 });
     _ = win.printSegment(.{
         .text = cwd,
-        .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+        .style = .{ .fg = palette.dim },
     }, .{ .row_offset = 0, .col_offset = @intCast(title.len) });
 }
 
@@ -520,8 +522,8 @@ pub fn renderUpdateBanner(win: vaxis.Window, version: []const u8) void {
     _ = win.printSegment(.{
         .text = message,
         .style = .{
-            .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
-            .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+            .fg = palette.black,
+            .bg = palette.accent,
             .bold = true,
         },
     }, .{ .row_offset = row, .col_offset = 1 });
@@ -533,8 +535,8 @@ pub fn renderWelcome(win: vaxis.Window, skills: agent.skills.Registry, mcps: age
         .width = win.width,
         .height = win.height -| top_offset,
     });
-    const header_style = vaxis.Style{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true };
-    const item_style = vaxis.Style{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } };
+    const header_style = vaxis.Style{ .fg = palette.accent, .bold = true };
+    const item_style = vaxis.Style{ .fg = palette.dim };
 
     var row: u16 = 1;
 
@@ -641,19 +643,19 @@ pub fn renderChatLines(chat_win: vaxis.Window, rendered_lines: anytype, scroll_o
                 if (th.is_header) {
                     _ = chat_win.printSegment(.{
                         .text = "Thinking:",
-                        .style = .{ .fg = .{ .rgb = .{ 0x55, 0x55, 0x55 } }, .italic = true, .bold = true },
+                        .style = .{ .fg = palette.dark, .italic = true, .bold = true },
                     }, .{ .row_offset = row, .col_offset = 2 });
                 } else if (th.text.len > 0) {
                     _ = chat_win.printSegment(.{
                         .text = th.text,
-                        .style = .{ .fg = .{ .rgb = .{ 0x77, 0x77, 0x77 } } },
+                        .style = .{ .fg = palette.subtle },
                     }, .{ .row_offset = row, .col_offset = 2 });
                 }
             },
             .notice => |notice| {
                 _ = chat_win.printSegment(.{
                     .text = notice.text,
-                    .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+                    .style = .{ .fg = palette.dim },
                 }, .{ .row_offset = row, .col_offset = line.start_col });
             },
         }
@@ -698,12 +700,12 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
     });
 
     const title = std.fmt.allocPrint(alloc, " {s} {s} ", .{
-        if (is_bash) "Run:" else if (is_mcp) "MCP Tool:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool (params):" else "Glob Tool (params):") else if (is_write) "New file:" else "Editing:",
-        if (is_search_preview) preview_path else app.tool_confirmation.file_path,
+        if (is_bash) "Run:" else if (is_mcp) "MCP Tool:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool:" else "Glob Tool:") else if (is_write) "New file:" else "Editing:",
+        if (is_web_preview) preview_path else if (is_search_preview) "" else app.tool_confirmation.file_path,
     }) catch " Preview ";
     _ = preview_win.printSegment(.{
         .text = title,
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true, .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } } },
+        .style = .{ .fg = palette.muted, .bold = true },
     }, .{ .row_offset = 0, .col_offset = 1 });
 
     const sel_row = preview_win.height -| 3;
@@ -717,15 +719,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
                 const grep_pattern = std.fmt.allocPrint(alloc, " pattern: {s}", .{pattern}) catch " pattern: ";
                 _ = preview_win.printSegment(.{
                     .text = grep_pattern,
-                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } } },
-                }, .{ .row_offset = grep_row, .col_offset = 1 });
-                grep_row += 1;
-            }
-            if (preview_path.len > 0) {
-                const grep_path = std.fmt.allocPrint(alloc, " path: {s}", .{preview_path}) catch " path: .";
-                _ = preview_win.printSegment(.{
-                    .text = grep_path,
-                    .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xFF } } },
+                    .style = .{ .fg = palette.dim },
                 }, .{ .row_offset = grep_row, .col_offset = 1 });
                 grep_row += 1;
             }
@@ -733,20 +727,20 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
                 const grep_include = std.fmt.allocPrint(alloc, " include: {s}", .{app.grep_status.include}) catch " include: ";
                 _ = preview_win.printSegment(.{
                     .text = grep_include,
-                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xE0, 0xA0 } } },
+                    .style = .{ .fg = palette.dim },
                 }, .{ .row_offset = grep_row, .col_offset = 1 });
                 grep_row += 1;
             }
 
             _ = preview_win.printSegment(.{
                 .text = if (is_grep) " Searching with current grep parameters..." else " Searching with current glob parameters...",
-                .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+                .style = .{ .fg = palette.faint, .italic = true },
             }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
         }
     } else if (is_bash) {
         _ = preview_win.printSegment(.{
             .text = " Do you want to proceed?",
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = palette.light },
         }, .{ .row_offset = 2, .col_offset = 1 });
     } else if (is_mcp) {
         var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
@@ -757,7 +751,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
             if (line_idx >= preview_scroll) {
                 _ = preview_win.printSegment(.{
                     .text = line,
-                    .style = .{ .fg = .{ .rgb = .{ 0xA0, 0xD0, 0xFF } } },
+                    .style = .{ .fg = palette.blue },
                 }, .{ .row_offset = prow, .col_offset = 1 });
                 prow += 1;
             }
@@ -776,7 +770,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
             const text = std.fmt.allocPrint(alloc, "{s}{s}", .{ if (selected) " ❯ " else "   ", opt.label }) catch opt.label;
             _ = preview_win.printSegment(.{
                 .text = text,
-                .style = .{ .fg = if (selected) vaxis.Color{ .rgb = .{ 0xFF, 0xFF, 0xFF } } else vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } }, .bold = selected },
+                .style = .{ .fg = if (selected) palette.white else palette.dim, .bold = selected },
             }, .{ .row_offset = sel_row + @as(u16, @intCast(idx)), .col_offset = 1 });
         }
     }
@@ -802,20 +796,20 @@ pub fn renderStatus(
 
     _ = win.printSegment(.{
         .text = mode_label,
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = palette.white, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = 0 });
 
     var res = win.printSegment(.{
         .text = " ",
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = palette.white, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = @as(u16, @intCast(mode_label.len + 1)) });
     res = win.printSegment(.{
         .text = model,
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = palette.white, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = res.col });
     res = win.printSegment(.{
         .text = " ",
-        .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+        .style = .{ .fg = palette.white, .bold = true },
     }, .{ .row_offset = status_row, .col_offset = res.col });
 
     if (app.tool_confirmation.cursor == .accept_all) {
@@ -824,7 +818,7 @@ pub fn renderStatus(
         status_right_reserved = @max(status_right_reserved, @as(u16, @intCast(badge.len)));
         _ = win.printSegment(.{
             .text = badge,
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = badge_col });
     }
 
@@ -835,57 +829,57 @@ pub fn renderStatus(
         status_right_reserved = @max(status_right_reserved, version_text_len + effort_text_len);
         var effort_res = win.printSegment(.{
             .text = " ",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_col });
         effort_res = win.printSegment(.{
             .text = effort_label,
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_res.col });
         _ = win.printSegment(.{
             .text = " ",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = status_row, .col_offset = effort_res.col });
     }
 
     if (app.tool_status) |tool| {
         res = win.printSegment(.{
             .text = " TOOL: ",
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = palette.light },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = tool,
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = palette.light },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = " ",
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = palette.light },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     } else {
         res = win.printSegment(.{
             .text = if (app.loading.active) " THINKING " else " READY ",
-            .style = .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .style = .{ .fg = palette.light },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
 
     if (clipboard_status) |status| {
         res = win.printSegment(.{
             .text = status,
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = palette.dim },
         }, .{ .row_offset = status_row, .col_offset = res.col });
         res = win.printSegment(.{
             .text = "  ctrl+q: quit",
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = palette.dim },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     } else {
         res = win.printSegment(.{
             .text = " ctrl+q: quit",
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = palette.dim },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
     if (show_exit) {
         res = win.printSegment(.{
             .text = "  ctrl+c again to exit ",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0x88 } } },
+            .style = .{ .fg = palette.yellow },
         }, .{ .row_offset = status_row, .col_offset = res.col });
     }
     app.context_usage.render(win, res.col, status_row, .default);
@@ -893,15 +887,15 @@ pub fn renderStatus(
     if (version_col > res.col and version_col >= status_right_reserved) {
         var version_res = win.printSegment(.{
             .text = " ",
-            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = palette.muted },
         }, .{ .row_offset = status_row, .col_offset = version_col });
         version_res = win.printSegment(.{
             .text = app_version,
-            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = palette.muted },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
         _ = win.printSegment(.{
             .text = " ",
-            .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } } },
+            .style = .{ .fg = palette.muted },
         }, .{ .row_offset = status_row, .col_offset = version_res.col });
     }
 }
@@ -934,8 +928,8 @@ pub fn renderAttachPreview(
     _ = box.printSegment(.{
         .text = " Attachments ",
         .style = .{
-            .fg = .{ .rgb = .{ 0x00, 0x00, 0x00 } },
-            .bg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+            .fg = palette.black,
+            .bg = palette.accent,
             .bold = true,
         },
     }, .{ .row_offset = 0, .col_offset = 1 });
@@ -984,7 +978,7 @@ pub fn renderAttachPreview(
                 pending_image.image.draw(image_win, .{ .scale = .contain }) catch {
                     _ = box.printSegment(.{
                         .text = "   [image preview unavailable]",
-                        .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
+                        .style = .{ .fg = palette.muted, .italic = true },
                     }, .{ .row_offset = row, .col_offset = 1 });
                     row += 1;
                     row_index += attach_preview.image_preview_rows;
@@ -993,7 +987,7 @@ pub fn renderAttachPreview(
             } else {
                 _ = box.printSegment(.{
                     .text = "   [loading image preview]",
-                    .style = .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
+                    .style = .{ .fg = palette.muted, .italic = true },
                 }, .{ .row_offset = row, .col_offset = 1 });
                 row += 1;
                 row_index += attach_preview.image_preview_rows;
@@ -1005,9 +999,9 @@ pub fn renderAttachPreview(
             continue;
         }
         const style: vaxis.Style = switch (line.kind) {
-            .header => .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
-            .placeholder => .{ .fg = .{ .rgb = .{ 0xAA, 0xAA, 0xAA } }, .italic = true },
-            .content => .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } },
+            .header => .{ .fg = palette.accent, .bold = true },
+            .placeholder => .{ .fg = palette.muted, .italic = true },
+            .content => .{ .fg = palette.light },
             .image => unreachable,
         };
         _ = box.printSegment(.{ .text = line.text, .style = style }, .{ .row_offset = row, .col_offset = 1 });

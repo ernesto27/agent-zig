@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const palette = @import("theme");
 
 pub const MAX_RESULTS = 10;
 pub const MAX_PATH_LEN = 512;
@@ -137,7 +138,7 @@ pub const AtPicker = struct {
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
 
-        const panel_bg: vaxis.Color = .{ .rgb = .{ 0x1A, 0x1A, 0x1A } };
+        const panel_bg = palette.bg_dark;
 
         var row_idx: u16 = 0;
         while (row_idx < picker_h) : (row_idx += 1) {
@@ -152,9 +153,9 @@ pub const AtPicker = struct {
             if (row >= n) break;
             const is_selected = idx == self.selected;
             const style: vaxis.Style = if (is_selected)
-                .{ .bg = .{ .rgb = .{ 0x30, 0x60, 0xA0 } }, .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true }
+                .{ .bg = palette.select_bg, .fg = palette.white, .bold = true }
             else
-                .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } }, .bg = panel_bg };
+                .{ .fg = palette.light, .bg = panel_bg };
             const prefix: []const u8 = if (is_selected) " > " else "   ";
             const res = picker.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = row, .col_offset = 0 });
             _ = picker.printSegment(.{ .text = path, .style = style }, .{ .row_offset = row, .col_offset = res.col });

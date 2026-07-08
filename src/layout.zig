@@ -44,12 +44,12 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: boo
         const content_lines: usize = if (std.mem.startsWith(u8, app.tool_confirmation.tool_name, "mcp__"))
             std.mem.count(u8, app.tool_confirmation.content, "\n") + 1
         else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob"))
-            4
+            3
         else
             1;
         const needed: u16 = @intCast(@min(content_lines + 6, 20));
         break :blk @max(needed, 8);
-    } else if (show_grep_panel or show_glob_panel) 8 else if (show_web_panel) 3 else if (app.pending_attachments.items.len > 0)
+    } else if (show_grep_panel or show_glob_panel) 7 else if (show_web_panel) 3 else if (app.pending_attachments.items.len > 0)
         attach_preview.requestedHeight(app.pending_attachments.items, show_images)
     else
         0;

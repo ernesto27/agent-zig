@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const palette = @import("theme");
 
 const Allocator = std.mem.Allocator;
 const Style = vaxis.Cell.Style;
@@ -7,26 +8,26 @@ const Color = vaxis.Cell.Color;
 
 // ── Colors ───────────────────────────────────────────────────────────
 
-const style_h1: Style = .{ .bold = true, .fg = .{ .rgb = .{ 0x60, 0xD0, 0xD0 } } };
-const style_h2: Style = .{ .bold = true, .fg = .{ .rgb = .{ 0x40, 0xA0, 0xC0 } } };
-const style_h3: Style = .{ .bold = true, .fg = .{ .rgb = .{ 0x80, 0x80, 0xC0 } } };
+const style_h1: Style = .{ .bold = true, .fg = palette.md.h1 };
+const style_h2: Style = .{ .bold = true, .fg = palette.md.h2 };
+const style_h3: Style = .{ .bold = true, .fg = palette.md.h3 };
 const style_bold: Style = .{ .bold = true };
 const style_italic: Style = .{ .italic = true };
 const style_bold_italic: Style = .{ .bold = true, .italic = true };
 const style_inline_code: Style = .{
-    .bg = .{ .rgb = .{ 0x3A, 0x3A, 0x3A } },
-    .fg = .{ .rgb = .{ 0x70, 0xB0, 0xF0 } },
+    .bg = palette.md.code_block_bg,
+    .fg = palette.md.code_fg,
 };
 const style_code_text: Style = .{
-    .fg = .{ .rgb = .{ 0xD0, 0xD0, 0xD0 } },
+    .fg = palette.md.code_block_fg,
 };
-const code_bg: Color = .{ .rgb = .{ 0x1A, 0x1A, 0x2E } };
+const code_bg: Color = palette.md.code_bg;
 const style_bullet: Style = .{
-    .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } },
+    .fg = palette.accent,
     .bold = true,
 };
 const style_lang_label: Style = .{
-    .fg = .{ .rgb = .{ 0x70, 0x70, 0x90 } },
+    .fg = palette.md.quote,
     .italic = true,
 };
 

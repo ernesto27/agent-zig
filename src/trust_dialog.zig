@@ -1,6 +1,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
+const palette = @import("theme");
 
 pub const Choice = enum { yes, no };
 
@@ -56,13 +57,13 @@ pub const TrustDialog = struct {
 
         _ = modal.printSegment(.{
             .text = " Do you trust in this folder?",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 1 });
 
         const path_width: usize = modal_w -| 3;
         _ = modal.printSegment(.{
             .text = agent.utils.truncate(self.cwd, path_width, 3),
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = palette.dim },
         }, .{ .row_offset = 2, .col_offset = 2, .wrap = .none });
 
         renderOption(modal, 4, "Yes - trust folder", self.selected == .yes);
@@ -70,12 +71,12 @@ pub const TrustDialog = struct {
 
         _ = modal.printSegment(.{
             .text = "↑↓ select   Enter confirm",
-            .style = .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } },
+            .style = .{ .fg = palette.faint },
         }, .{ .row_offset = 7, .col_offset = 2 });
     }
 
     fn renderOption(modal: vaxis.Window, row: u16, label: []const u8, is_sel: bool) void {
-        const fg: vaxis.Color = if (is_sel) .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } else .{ .rgb = .{ 0xDD, 0xDD, 0xDD } };
+        const fg: vaxis.Color = if (is_sel) palette.cyan else palette.bright;
         if (is_sel) {
             _ = modal.printSegment(.{
                 .text = "❯",

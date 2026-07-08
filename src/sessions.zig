@@ -4,6 +4,7 @@ const modal_list = agent.modal_list;
 const agent = @import("agent");
 const config = agent.config;
 const llm = agent.llm;
+const palette = @import("theme");
 
 const log = std.log.scoped(.sessions);
 
@@ -385,11 +386,11 @@ pub const Sessions = struct {
 
         _ = modal.printSegment(.{
             .text = " Rename session",
-            .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+            .style = .{ .fg = palette.white, .bold = true },
         }, .{ .row_offset = 0, .col_offset = 1 });
         _ = modal.printSegment(.{
             .text = "esc ",
-            .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+            .style = .{ .fg = palette.dim },
         }, .{ .row_offset = 0, .col_offset = modal_w -| 5 });
 
         const name_text = if (self.rename_input.items.len > 0)
@@ -397,9 +398,9 @@ pub const Sessions = struct {
         else
             "Enter new name...";
         const name_style: vaxis.Style = if (self.rename_input.items.len > 0)
-            .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } }
+            .{ .fg = palette.white }
         else
-            .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } };
+            .{ .fg = palette.faint };
 
         _ = modal.printSegment(.{
             .text = name_text,
@@ -408,7 +409,7 @@ pub const Sessions = struct {
 
         _ = modal.printSegment(.{
             .text = "Enter to save   esc to cancel",
-            .style = .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } },
+            .style = .{ .fg = palette.faint },
         }, .{ .row_offset = 4, .col_offset = 2 });
     }
 

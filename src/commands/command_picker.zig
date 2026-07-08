@@ -1,11 +1,12 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
+const palette = @import("theme");
 
 pub const MAX_RESULTS = 10;
 pub const SKILL_PREFIX = "skills:";
 const COUNTER_BUF_LEN = 32;
-const COUNTER_FG = vaxis.Color{ .rgb = .{ 0x88, 0x88, 0x88 } };
+const COUNTER_FG = palette.dim;
 
 pub const CommandAction = enum { provider, model, clear, compact, fork, resume_session, init, mcp, skills, rename, sandbox, export_session, settings, exit, logout };
 
@@ -149,9 +150,9 @@ pub const CommandPicker = struct {
 
             const is_selected = idx == self.selected;
             const style: vaxis.Style = if (is_selected)
-                .{ .fg = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } }, .bold = false }
+                .{ .fg = palette.cyan, .bold = false }
             else
-                .{ .fg = .{ .rgb = .{ 0xCC, 0xCC, 0xCC } } };
+                .{ .fg = palette.light };
             const prefix: []const u8 = if (is_selected) "❯ /" else "  /";
 
             const res = picker.printSegment(.{ .text = prefix, .style = style }, .{ .row_offset = row, .col_offset = 0 });
@@ -160,9 +161,9 @@ pub const CommandPicker = struct {
             _ = picker.printSegment(.{
                 .text = agent.utils.truncate(command.description, max_desc_width, 3),
                 .style = if (is_selected)
-                    .{ .fg = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } }
+                    .{ .fg = palette.cyan }
                 else
-                    .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+                    .{ .fg = palette.dim },
             }, .{ .row_offset = row, .col_offset = desc_col });
         }
         self.renderCounter(win, picker_y, picker_h);

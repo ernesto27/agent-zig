@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const agent = @import("agent");
 const modal_list = agent.modal_list;
 const p = agent.llm.providers;
+const palette = @import("theme");
 
 pub const Phase = enum { list, key_input };
 
@@ -116,11 +117,11 @@ pub const ProviderPicker = struct {
                 const provider = self.selectedProvider();
                 _ = modal.printSegment(.{
                     .text = " API key for ",
-                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } }, .bold = true },
+                    .style = .{ .fg = palette.white, .bold = true },
                 }, .{ .row_offset = 0, .col_offset = 1 });
                 _ = modal.printSegment(.{
                     .text = provider.name,
-                    .style = .{ .fg = .{ .rgb = .{ 0xC0, 0x70, 0x20 } }, .bold = true },
+                    .style = .{ .fg = palette.amber_dark, .bold = true },
                 }, .{ .row_offset = 0, .col_offset = 15 });
 
                 const key_text = if (self.key_input.items.len > 0)
@@ -128,9 +129,9 @@ pub const ProviderPicker = struct {
                 else
                     "Enter API key...";
                 const key_style: vaxis.Style = if (self.key_input.items.len > 0)
-                    .{ .fg = .{ .rgb = .{ 0xFF, 0xFF, 0xFF } } }
+                    .{ .fg = palette.white }
                 else
-                    .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } };
+                    .{ .fg = palette.faint };
 
                 _ = modal.printSegment(.{
                     .text = key_text,
@@ -139,7 +140,7 @@ pub const ProviderPicker = struct {
 
                 _ = modal.printSegment(.{
                     .text = "Enter to save   esc to cancel",
-                    .style = .{ .fg = .{ .rgb = .{ 0x66, 0x66, 0x66 } } },
+                    .style = .{ .fg = palette.faint },
                 }, .{ .row_offset = 4, .col_offset = 2 });
             },
         }

@@ -4,8 +4,9 @@ const agent = @import("agent");
 const modal_list = agent.modal_list;
 
 const Authenticated = agent.config.Providers.Authenticated;
+const palette = @import("theme");
 
-const badge_fg: vaxis.Color = .{ .rgb = .{ 0x60, 0xCC, 0x60 } };
+const badge_fg = palette.green;
 
 pub const LogoutPicker = struct {
     active: bool = false,

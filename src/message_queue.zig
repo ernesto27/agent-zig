@@ -1,5 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const palette = @import("theme");
 
 /// FIFO queue of message strings. The queue owns its messages: enqueue() dupes
 /// the input, dequeue() hands ownership to the caller, deinit() frees the rest.
@@ -48,11 +49,11 @@ pub const MessageQueue = struct {
             const row: u16 = top_y + i;
             const res = win.printSegment(.{
                 .text = "Steering: ",
-                .style = .{ .fg = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } } },
+                .style = .{ .fg = palette.cyan },
             }, .{ .row_offset = row, .col_offset = 1 });
             _ = win.printSegment(.{
                 .text = self.items.items[i],
-                .style = .{ .fg = .{ .rgb = .{ 0x88, 0x88, 0x88 } } },
+                .style = .{ .fg = palette.dim },
             }, .{ .row_offset = row, .col_offset = res.col });
         }
     }

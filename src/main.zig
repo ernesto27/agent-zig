@@ -563,18 +563,10 @@ pub fn main() !void {
                 .border = .{ .where = .all, .glyphs = .single_rounded },
             });
 
-            if (app.tool_confirmation.pending) {
-                var confirm_buf: [256]u8 = undefined;
-                const action = if (std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file")) "write" else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) "run" else "edit";
-                const confirm_text = std.fmt.bufPrint(&confirm_buf, " Allow agent to {s} '{s}'?  ↑↓ select   Enter confirm   Esc cancel", .{
-                    action,
-                    app.tool_confirmation.file_path,
-                }) catch " ↑↓ select  Enter confirm  Esc cancel";
-                _ = input_win.printSegment(.{
-                    .text = confirm_text,
-                    .style = .{ .fg = .{ .rgb = .{ 0xFF, 0xD0, 0x40 } }, .bold = true },
-                }, .{ .row_offset = 0, .col_offset = 1 });
-            } else {
+            // While a tool confirmation is pending, the options (Yes/No/Accept all)
+            // are shown in the preview panel above, so leave the input box empty
+            // rather than repeating the prompt here.
+            if (!app.tool_confirmation.pending) {
                 ui.renderInput(input_win, input_layout.prompt, ctx.input.items, ctx.cursor_pos, input_layout.view, &app, ui.inputSelectionBounds(input_selection, input_layout.view));
             }
         }

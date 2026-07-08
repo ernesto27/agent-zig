@@ -2,12 +2,13 @@ const std = @import("std");
 const vaxis = @import("vaxis");
 const agent = @import("agent");
 const modal_list = agent.modal_list;
+const palette = @import("theme");
 
 pub const Phase = enum { servers, tools };
 
-const status_connected_fg: vaxis.Color = .{ .rgb = .{ 0x60, 0xCC, 0x60 } };
-const status_loading_fg: vaxis.Color = .{ .rgb = .{ 0xFF, 0xC0, 0x40 } };
-const status_failed_fg: vaxis.Color = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };
+const status_connected_fg = palette.green;
+const status_loading_fg = palette.amber;
+const status_failed_fg = palette.red;
 
 const MAX_SERVERS = 32;
 const COUNT_TEXT_CAP = 16;

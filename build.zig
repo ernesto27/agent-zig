@@ -101,6 +101,17 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("vaxis", vaxis_dep.module("vaxis"));
     mod.addImport("vaxis", vaxis_dep.module("vaxis"));
 
+    // Shared color palette. Made a standalone module so it can be imported by
+    // both the "agent" library module and the app module without a source file
+    // ending up owned by two modules at once.
+    const theme_mod = b.createModule(.{
+        .root_source_file = b.path("src/theme.zig"),
+        .target = target,
+    });
+    theme_mod.addImport("vaxis", vaxis_dep.module("vaxis"));
+    exe.root_module.addImport("theme", theme_mod);
+    mod.addImport("theme", theme_mod);
+
     b.installArtifact(exe);
 
     // This creates a top level step. Top level steps have a name and can be

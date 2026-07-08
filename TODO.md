@@ -14,10 +14,11 @@
 [x] - remove orange in thining
 [x] - remove orange for text TUI response
 [x] - add logout opton
-[] - skill promt message does not queues
+[x] - skill promt message does not queues
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json
-[] - test in windows
+[x] - test in windows
+
 [] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
 [] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)

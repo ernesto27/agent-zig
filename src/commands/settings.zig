@@ -1,9 +1,10 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const modal_list = @import("../modal_list.zig");
+const palette = @import("theme");
 
-const badge_on: vaxis.Color = .{ .rgb = .{ 0x60, 0xCC, 0x60 } };
-const badge_off: vaxis.Color = .{ .rgb = .{ 0x88, 0x88, 0x88 } };
+const badge_on = palette.green;
+const badge_off = palette.dim;
 
 const log = std.log.scoped(.settings);
 

@@ -4,12 +4,13 @@ const agent = @import("agent");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const ConfirmationAction = app_mod.ConfirmationAction;
+const palette = @import("theme");
 
-const title_fg: vaxis.Color = .{ .rgb = .{ 0x9C, 0xE3, 0xEE } };
-const fg_muted: vaxis.Color = .{ .rgb = .{ 0x88, 0x88, 0x88 } };
-const fg_write: vaxis.Color = .{ .rgb = .{ 0xCC, 0xFF, 0xCC } };
-const fg_old: vaxis.Color = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };
-const fg_new: vaxis.Color = .{ .rgb = .{ 0x60, 0xFF, 0x60 } };
+const title_fg = palette.cyan;
+const fg_muted = palette.dim;
+const fg_write = palette.green_light;
+const fg_old = palette.red;
+const fg_new = palette.green_bright;
 
 const h_margin: u16 = 8;
 const v_margin: u16 = 4;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const agent = @import("agent");
 const sessions = @import("sessions.zig");
+const palette = @import("theme");
 
 pub const Role = enum { user, assistant, notice };
 
@@ -23,7 +24,7 @@ pub const Message = struct {
         if (msg.is_error) {
             for (lines) |line| {
                 for (line.spans) |*span| {
-                    span.style.fg = .{ .rgb = .{ 0xFF, 0x60, 0x60 } };
+                    span.style.fg = palette.red;
                 }
             }
         }
