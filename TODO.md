@@ -18,7 +18,7 @@
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json
 [x] - test in windows
-
+[] - show line number in code preview
 [] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
 [] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)

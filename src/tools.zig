@@ -5,6 +5,7 @@ const skills = @import("skills.zig");
 const web = @import("tools/web.zig");
 const mcp_registry = @import("mcp/registry.zig");
 const sandbox_mod = @import("sandbox.zig");
+const tasks = @import("tasks.zig");
 
 const log = std.log.scoped(.tools);
 
@@ -19,6 +20,10 @@ pub const Context = struct {
     /// When set and active, the filesystem tools run inside the sandbox
     /// container (against the mounted worktree at /workspace) instead of the host.
     sandbox: ?*sandbox_mod.Sandbox = null,
+    /// Session task list written by `task_write`. Guarded by `task_mutex`,
+    /// which is the App mutex shared with the render thread.
+    task_store: ?*tasks.TaskStore = null,
+    task_mutex: ?*std.Thread.Mutex = null,
 };
 
 pub fn getStringField(input: std.json.Value, field: []const u8) ?[]const u8 {
@@ -39,6 +44,28 @@ const read_file_schema_json =
     \\    }
     \\  },
     \\  "required": ["file_path"]
+    \\}
+;
+
+const task_write_schema_json =
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "tasks": {
+    \\      "type": "array",
+    \\      "description": "The complete, ordered task list. Replaces the previous list entirely — always send every task.",
+    \\      "items": {
+    \\        "type": "object",
+    \\        "properties": {
+    \\          "id": { "type": "string", "description": "Stable identifier for the task" },
+    \\          "content": { "type": "string", "description": "Short description of the task — a few words (about 5 or fewer)" },
+    \\          "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+    \\        },
+    \\        "required": ["id", "content", "status"]
+    \\      }
+    \\    }
+    \\  },
+    \\  "required": ["tasks"]
     \\}
 ;
 
@@ -293,6 +320,12 @@ const tool_specs = [_]ToolSpec{
         .schema_json = skill_script_schema_json,
         .required = &.{ "skill", "path" },
     },
+    .{
+        .name = "task_write",
+        .description = "Create or update the task list for the current session so the user can see your plan and progress on multi-step work. Send the complete ordered list every call — it replaces the previous list. Keep exactly one task 'in_progress' while you work on it and mark it 'completed' when done. Keep each task's content short — a few words (about 5 or fewer); it renders in a narrow sidebar.",
+        .schema_json = task_write_schema_json,
+        .required = &.{"tasks"},
+    },
 };
 
 pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const message.ToolDefinition {
@@ -365,11 +398,60 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
     if (std.mem.eql(u8, tool_name, "skill_script")) {
         return resolveSkillScript(allocator, ctx, input);
     }
+    if (std.mem.eql(u8, tool_name, "task_write")) {
+        return taskWriteTool(allocator, ctx, input);
+    }
 
     return .{
         .content = "Unknown tool",
         .is_error = true,
     };
+}
+
+fn taskWriteTool(allocator: std.mem.Allocator, ctx: Context, input: std.json.Value) ToolResult {
+    const store = ctx.task_store orelse
+        return .{ .content = "Task tracking is not available", .is_error = true };
+
+    const tasks_val = getField(input, "tasks") orelse
+        return .{ .content = "task_write requires a 'tasks' array", .is_error = true };
+    if (tasks_val != .array)
+        return .{ .content = "'tasks' must be an array", .is_error = true };
+
+    // Validate fully into a temp list before touching the store, so an invalid
+    // item leaves the existing list unchanged. `store.apply` dupes each id/content
+    // into its own arena, so this list is only needed for the duration of the call.
+    var parsed: std.ArrayListUnmanaged(tasks.Task) = .{};
+    defer parsed.deinit(allocator);
+    for (tasks_val.array.items) |item| {
+        if (item != .object)
+            return .{ .content = "each task must be an object", .is_error = true };
+        const id = getStringField(item, "id") orelse
+            return .{ .content = "each task requires a string 'id'", .is_error = true };
+        if (id.len == 0)
+            return .{ .content = "task 'id' must not be empty", .is_error = true };
+        const content = getStringField(item, "content") orelse
+            return .{ .content = "each task requires string 'content'", .is_error = true };
+        const status_str = getStringField(item, "status") orelse
+            return .{ .content = "each task requires a 'status'", .is_error = true };
+        const status = tasks.Status.fromString(status_str) orelse
+            return .{ .content = "status must be pending, in_progress, or completed", .is_error = true };
+        parsed.append(allocator, .{ .id = id, .content = content, .status = status }) catch
+            return .{ .content = "out of memory", .is_error = true };
+    }
+
+    if (ctx.task_mutex) |m| m.lock();
+    defer if (ctx.task_mutex) |m| m.unlock();
+
+    store.apply(parsed.items) catch
+        return .{ .content = "failed to update task list", .is_error = true };
+
+    const s = store.summary();
+    const msg = std.fmt.allocPrint(
+        allocator,
+        "Task list updated: {d} total — {d} completed, {d} in progress, {d} pending",
+        .{ s.total, s.completed, s.in_progress, s.pending },
+    ) catch return .{ .content = "Task list updated", .is_error = false };
+    return .{ .content = msg, .is_error = false };
 }
 
 pub fn runBashCommand(allocator: std.mem.Allocator, command: []const u8) !ToolResult {

@@ -22,6 +22,7 @@ pub const PlanMode = struct {
         if (std.mem.eql(u8, tool_name, "web_extract")) return .{ .ok = true, .reason = "" };
         if (std.mem.eql(u8, tool_name, "skill")) return .{ .ok = true, .reason = "" };
         if (std.mem.eql(u8, tool_name, "skill_resource")) return .{ .ok = true, .reason = "" };
+        if (std.mem.eql(u8, tool_name, "task_write")) return .{ .ok = true, .reason = "" };
 
         if (std.mem.eql(u8, tool_name, "write_file")) return .{ .ok = false, .reason = "Plan Mode blocks file writes" };
         if (std.mem.eql(u8, tool_name, "edit_file")) return .{ .ok = false, .reason = "Plan Mode blocks file edits" };

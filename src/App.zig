@@ -104,6 +104,7 @@ pub const App = struct {
     cancel_requested: bool = false,
     context_usage: context_usage_mod.contextUsage = .{},
     mode: Mode = .{ .build = .{} },
+    tasks: agent.tasks.TaskStore,
     sandbox: agent.sandbox.Sandbox = .{},
     sandbox_busy: bool = false,
     // Handle for the background start/stop worker. Kept (not detached) so deinit
@@ -150,6 +151,7 @@ pub const App = struct {
             .sessions = sess,
             .config_store = config,
             .settings = settings_mod.Settings.init(config.cfg.settings),
+            .tasks = agent.tasks.TaskStore.init(alloc),
         };
     }
 
@@ -180,12 +182,18 @@ pub const App = struct {
     }
 
     pub fn resumeSession(self: *Self, alloc: std.mem.Allocator, filename: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.messages.resumeSession(alloc, &self.sessions, filename);
+        self.tasks.clear();
         self.needs_redraw = true;
     }
 
     pub fn clearHistory(self: *Self) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.messages.clear(self.alloc);
+        self.tasks.clear();
     }
 
     pub fn initCMD(self: *Self) !void {
@@ -342,6 +350,7 @@ pub const App = struct {
         if (self.sandbox_thread) |t| t.join();
         self.sandbox.stop(self.alloc);
         self.chat_render_cache.arena.deinit();
+        self.tasks.deinit();
         self.messages.deinit(self.alloc);
         self.message_queue.deinit(self.alloc);
         self.clearPendingAttachments();
@@ -842,6 +851,8 @@ pub const App = struct {
             .skill_registry = &self.skill_registry,
             .mcp_registry = &self.mcp_registry,
             .sandbox = &self.sandbox,
+            .task_store = &self.tasks,
+            .task_mutex = &self.mutex,
         };
         const tool_defs = agent.tools.getDefinitions(arena.allocator(), tool_ctx) catch &.{};
 

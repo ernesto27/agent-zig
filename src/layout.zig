@@ -13,12 +13,21 @@ pub const Layout = struct {
     queue_h: u16,
     queue_y: u16,
     input_y: u16,
+    /// Width of the task sidebar column carved out of the chat row, or 0 when
+    /// hidden. The chat window uses `screen_width - sidebar_w`.
+    sidebar_w: u16,
 };
 
 /// Max queued-message rows shown at once (the rest are off-screen but still sent).
 pub const max_queue_visible: u16 = 5;
 
-pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: bool) Layout {
+/// Fixed width of the task sidebar column when shown.
+pub const sidebar_width: u16 = 40;
+/// Chat must keep at least this many columns; below `sidebar_width + this` the
+/// sidebar is suppressed so a narrow terminal isn't crushed.
+pub const min_chat_width: u16 = 40;
+
+pub fn compute(screen_width: u16, screen_height: u16, app: *App, input_box_h: u16, show_images: bool) Layout {
     const chat_y: u16 = 1;
     const min_chat_h: u16 = 1;
     const show_grep_panel = app.grep_status.pattern.len > 0 or
@@ -66,6 +75,10 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: boo
     const loading_y: u16 = queue_y + queue_h;
     const input_y: u16 = loading_y + loading_h;
 
+    const sidebar_fits = screen_width >= min_chat_width + sidebar_width;
+    const has_pending_work = !app.tasks.isEmpty() and !app.tasks.allCompleted();
+    const sidebar_w: u16 = if (has_pending_work and sidebar_fits) sidebar_width else 0;
+
     return .{
         .chat_y = chat_y,
         .preview_h = preview_h,
@@ -76,5 +89,6 @@ pub fn compute(screen_height: u16, app: *App, input_box_h: u16, show_images: boo
         .queue_h = queue_h,
         .queue_y = queue_y,
         .input_y = input_y,
+        .sidebar_w = sidebar_w,
     };
 }

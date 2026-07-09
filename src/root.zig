@@ -7,6 +7,7 @@ pub const config = @import("config.zig");
 pub const json_helpers = @import("json_helpers.zig");
 pub const markdown = @import("markdown.zig");
 pub const tools = @import("tools.zig");
+pub const tasks = @import("tasks.zig");
 pub const sandbox = @import("sandbox.zig");
 pub const system_prompt = @import("system_prompt.zig");
 pub const skills = @import("skills.zig");

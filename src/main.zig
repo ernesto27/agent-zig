@@ -5,6 +5,7 @@ const app_mod = @import("App.zig");
 const App = app_mod.App;
 const chat_selection = @import("chat_selection.zig");
 const layout_mod = @import("layout.zig");
+const task_sidebar = @import("task_sidebar.zig");
 const ui = @import("ui.zig");
 const at_picker_mod = @import("at_picker.zig");
 const command_picker_mod = @import("commands/command_picker.zig");
@@ -323,12 +324,12 @@ pub fn main() !void {
 
                     app.mutex.lock();
                     const input_layout = ui.buildInputLayout(mouse_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
-                    const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
+                    const layout = layout_mod.compute(vx.screen.width, vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
 
                     const chat_win = vx.window().child(.{
                         .x_off = 0,
                         .y_off = layout.chat_y,
-                        .width = vx.screen.width,
+                        .width = vx.screen.width -| layout.sidebar_w,
                         .height = layout.chat_h_total,
                         .border = .{ .where = .all, .glyphs = .single_rounded },
                     });
@@ -449,7 +450,7 @@ pub fn main() !void {
         ui.renderHeader(win, header);
 
         const input_layout = ui.buildInputLayout(frame_arena.allocator(), &app, ctx.input.items, vx.screen.width, ctx.cursor_pos);
-        const layout = layout_mod.compute(vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
+        const layout = layout_mod.compute(vx.screen.width, vx.screen.height, &app, input_layout.view.box_h, vx.caps.kitty_graphics);
 
         if (code_modal.isCodeConfirmation(&app)) {
             const max_modal_scroll = code_modal.maxScroll(vx.screen.width, vx.screen.height, &app);
@@ -467,10 +468,22 @@ pub fn main() !void {
         const chat_win = win.child(.{
             .x_off = 0,
             .y_off = layout.chat_y,
-            .width = vx.screen.width,
+            .width = vx.screen.width -| layout.sidebar_w,
             .height = layout.chat_h_total,
             .border = .{ .where = .all, .glyphs = .single_rounded },
         });
+
+        if (layout.sidebar_w > 0) {
+            task_sidebar.render(
+                frame_arena.allocator(),
+                win,
+                &app,
+                vx.screen.width -| layout.sidebar_w,
+                layout.chat_y,
+                layout.sidebar_w,
+                layout.chat_h_total,
+            );
+        }
 
         const chat_h = chat_win.height;
         const rendered_lines = chat_selection.renderedLinesCached(&app, chat_win.width, vx.screen.width_method) catch &.{};
