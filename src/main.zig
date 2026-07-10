@@ -455,6 +455,11 @@ pub fn main() !void {
         if (code_modal.isCodeConfirmation(&app)) {
             const max_modal_scroll = code_modal.maxScroll(vx.screen.width, vx.screen.height, &app);
             if (app.preview_scroll > max_modal_scroll) app.preview_scroll = max_modal_scroll;
+        } else if (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) {
+            const visible: usize = if (layout.preview_h > 8) layout.preview_h - 8 else 1;
+            const cmd_rows = layout_mod.wrappedRows(app.tool_confirmation.file_path, vx.screen.width -| 4);
+            const max_scroll = if (cmd_rows > visible) cmd_rows - visible else 0;
+            if (app.preview_scroll > max_scroll) app.preview_scroll = max_scroll;
         } else if (!app.tool_confirmation.pending and app.pending_attachments.items.len > 0 and layout.preview_h > 0) {
             const inner_preview_h: usize = if (layout.preview_h > 2) layout.preview_h - 2 else 0;
             const preview_rows = attach_preview.totalContentRows(app.pending_attachments.items, vx.caps.kitty_graphics);

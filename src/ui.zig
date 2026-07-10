@@ -701,7 +701,7 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
 
     const title = std.fmt.allocPrint(alloc, " {s} {s} ", .{
         if (is_bash) "Run:" else if (is_mcp) "MCP Tool:" else if (is_search_preview) (if (is_web_preview) "Web Tool:" else if (is_grep) "Grep Tool:" else "Glob Tool:") else if (is_write) "New file:" else "Editing:",
-        if (is_web_preview) preview_path else if (is_search_preview) "" else app.tool_confirmation.file_path,
+        if (is_web_preview) preview_path else if (is_search_preview or is_bash) "" else app.tool_confirmation.file_path,
     }) catch " Preview ";
     _ = preview_win.printSegment(.{
         .text = title,
@@ -738,10 +738,21 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
             }, .{ .row_offset = grep_row + 1, .col_offset = 1 });
         }
     } else if (is_bash) {
+        const proceed_row = sel_row -| 2;
+        const cmd_win = preview_win.child(.{
+            .x_off = 1,
+            .y_off = 1,
+            .width = preview_win.width -| 2,
+            .height = proceed_row -| 1,
+        });
+        _ = cmd_win.print(&.{.{
+            .text = app.tool_confirmation.file_path,
+            .style = .{ .fg = palette.light },
+        }}, .{ .wrap = .word, .row_offset = std.math.cast(u16, preview_scroll) orelse std.math.maxInt(u16) });
         _ = preview_win.printSegment(.{
             .text = " Do you want to proceed?",
             .style = .{ .fg = palette.light },
-        }, .{ .row_offset = 2, .col_offset = 1 });
+        }, .{ .row_offset = proceed_row, .col_offset = 1 });
     } else if (is_mcp) {
         var line_iter = std.mem.splitScalar(u8, app.tool_confirmation.content, '\n');
         var line_idx: usize = 0;
