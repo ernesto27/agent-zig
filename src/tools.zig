@@ -359,6 +359,11 @@ pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const messa
     return builtins.toOwnedSlice(allocator);
 }
 
+fn execFor(ctx: Context) Exec {
+    if (ctx.sandbox) |sb| return if (sb.active) .{ .sandbox = sb } else .host;
+    return .host;
+}
+
 pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8, input: std.json.Value) ToolResult {
     // MCP tools are prefixed `mcp__<server>__<tool>`. routeCall returns null
     // for non-MCP names so the built-in dispatch below runs unchanged.
@@ -370,10 +375,7 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
 
     // Filesystem tools are written once against `Exec`; pick the backend. When a
     // sandbox is active they run in the container, otherwise natively on the host.
-    const exec: Exec = if (ctx.sandbox) |sb|
-        (if (sb.active) Exec{ .sandbox = sb } else .host)
-    else
-        .host;
+    const exec = execFor(ctx);
 
     if (std.mem.eql(u8, tool_name, "read_file")) return readTool(allocator, exec, input);
     if (std.mem.eql(u8, tool_name, "write_file")) return writeTool(allocator, exec, input);
@@ -572,6 +574,18 @@ fn editTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) Too
     const result = std.fmt.allocPrint(allocator, "Successfully edited {s}", .{file_path.?}) catch
         return .{ .content = "File edited" };
     return .{ .content = result };
+}
+
+/// First 1-based line where `needle` occurs in `file_path`, read through the
+/// same host/sandbox backend the edit tools use. Null if unreadable or absent.
+/// Expects an arena allocator; the transient read buffer is not freed here.
+pub fn matchStartLine(arena: std.mem.Allocator, ctx: Context, file_path: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return null;
+    const exec = execFor(ctx);
+    const read = exec.readFile(arena, file_path);
+    if (read.is_error) return null;
+    const idx = std.mem.indexOf(u8, read.content, needle) orelse return null;
+    return std.mem.count(u8, read.content[0..idx], "\n") + 1;
 }
 
 fn globTool(allocator: std.mem.Allocator, exec: Exec, input: std.json.Value) ToolResult {

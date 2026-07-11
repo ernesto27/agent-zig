@@ -59,7 +59,22 @@ fn contentCols(app: *const App) usize {
         var new_it = std.mem.splitScalar(u8, tc.new_string, '\n');
         while (new_it.next()) |line| max_len = @max(max_len, line.len + 2);
     }
-    return max_len;
+    return max_len + gutterWidth(app);
+}
+
+fn maxLineNo(app: *const App) usize {
+    const tc = app.tool_confirmation;
+    if (isWrite(app)) return std.mem.count(u8, tc.content, "\n") + 1;
+    const old_count = std.mem.count(u8, tc.old_string, "\n") + 1;
+    const new_count = std.mem.count(u8, tc.new_string, "\n") + 1;
+    return tc.start_line + @max(old_count, new_count) - 1;
+}
+
+fn gutterWidth(app: *const App) u16 {
+    var digits: u16 = 1;
+    var v = maxLineNo(app);
+    while (v >= 10) : (v /= 10) digits += 1;
+    return digits + 1;
 }
 
 fn geometry(screen_w: u16, screen_h: u16, content_cols: usize) Geometry {
@@ -144,6 +159,8 @@ pub fn render(
         }
     }
 
+    const gw = gutterWidth(app);
+    const digits: usize = gw - 1;
     if (isWrite(app)) {
         var it = std.mem.splitScalar(u8, tc.content, '\n');
         var idx: usize = 0;
@@ -151,10 +168,15 @@ pub fn render(
         while (it.next()) |line| {
             if (prow >= geo.body_end) break;
             if (idx >= scroll) {
+                const g = std.fmt.allocPrint(alloc, "{[n]d: >[w]} ", .{ .n = idx + 1, .w = digits }) catch "";
                 _ = modal.printSegment(.{
-                    .text = agent.utils.truncate(line, inner_w, 1),
-                    .style = .{ .fg = fg_write },
+                    .text = g,
+                    .style = .{ .fg = fg_muted },
                 }, .{ .row_offset = prow, .col_offset = 1 });
+                _ = modal.printSegment(.{
+                    .text = agent.utils.truncate(line, inner_w -| gw, 1),
+                    .style = .{ .fg = fg_write },
+                }, .{ .row_offset = prow, .col_offset = 1 + gw });
                 prow += 1;
             }
             idx += 1;
@@ -162,31 +184,45 @@ pub fn render(
     } else {
         var prow: u16 = geo.body_start;
         var idx: usize = 0;
+        var oln: usize = tc.start_line;
         var old_it = std.mem.splitScalar(u8, tc.old_string, '\n');
         while (old_it.next()) |line| {
             if (prow >= geo.body_end) break;
             if (idx >= scroll) {
+                const g = std.fmt.allocPrint(alloc, "{[n]d: >[w]} ", .{ .n = oln, .w = digits }) catch "";
+                _ = modal.printSegment(.{
+                    .text = g,
+                    .style = .{ .fg = fg_muted },
+                }, .{ .row_offset = prow, .col_offset = 1 });
                 const dl = std.fmt.allocPrint(alloc, "- {s}", .{line}) catch line;
                 _ = modal.printSegment(.{
-                    .text = agent.utils.truncate(dl, inner_w, 1),
+                    .text = agent.utils.truncate(dl, inner_w -| gw, 1),
                     .style = .{ .fg = fg_old },
-                }, .{ .row_offset = prow, .col_offset = 1 });
+                }, .{ .row_offset = prow, .col_offset = 1 + gw });
                 prow += 1;
             }
             idx += 1;
+            oln += 1;
         }
+        var nln: usize = tc.start_line;
         var new_it = std.mem.splitScalar(u8, tc.new_string, '\n');
         while (new_it.next()) |line| {
             if (prow >= geo.body_end) break;
             if (idx >= scroll) {
+                const g = std.fmt.allocPrint(alloc, "{[n]d: >[w]} ", .{ .n = nln, .w = digits }) catch "";
+                _ = modal.printSegment(.{
+                    .text = g,
+                    .style = .{ .fg = fg_muted },
+                }, .{ .row_offset = prow, .col_offset = 1 });
                 const dl = std.fmt.allocPrint(alloc, "+ {s}", .{line}) catch line;
                 _ = modal.printSegment(.{
-                    .text = agent.utils.truncate(dl, inner_w, 1),
+                    .text = agent.utils.truncate(dl, inner_w -| gw, 1),
                     .style = .{ .fg = fg_new },
-                }, .{ .row_offset = prow, .col_offset = 1 });
+                }, .{ .row_offset = prow, .col_offset = 1 + gw });
                 prow += 1;
             }
             idx += 1;
+            nln += 1;
         }
     }
 

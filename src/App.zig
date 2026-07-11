@@ -30,6 +30,7 @@ pub const ToolConfirmation = struct {
     content: []const u8 = "",
     old_string: []const u8 = "",
     new_string: []const u8 = "",
+    start_line: usize = 1,
     cursor: ConfirmationAction = .approve,
 };
 
@@ -567,6 +568,12 @@ pub const App = struct {
         const old_s = if (is_mcp) "" else (agent.tools.getStringField(input, "old_string") orelse "");
         const new_s = if (is_mcp) "" else (agent.tools.getStringField(input, "new_string") orelse "");
 
+        var start_line: usize = 1;
+        if (std.mem.eql(u8, name, "edit_file")) {
+            const line_ctx = agent.tools.Context{ .sandbox = &self.sandbox };
+            if (agent.tools.matchStartLine(arena_alloc, line_ctx, fp, old_s)) |ln| start_line = ln;
+        }
+
         self.mutex.lock();
         self.loading.pause();
         self.tool_confirmation.pending = true;
@@ -575,6 +582,7 @@ pub const App = struct {
         self.tool_confirmation.content = cnt;
         self.tool_confirmation.old_string = old_s;
         self.tool_confirmation.new_string = new_s;
+        self.tool_confirmation.start_line = start_line;
         self.tool_confirmation.cursor = .approve;
         self.preview_scroll = 0;
         self.tool_status = name;
