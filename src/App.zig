@@ -25,6 +25,7 @@ pub const Message = messages_mod.Message;
 pub const ToolConfirmation = struct {
     pending: bool = false,
     tool_name: []const u8 = "",
+    tool: ?agent.tools.ToolName = null,
     file_path: []const u8 = "",
     cond: std.Thread.Condition = .{},
     content: []const u8 = "",
@@ -526,10 +527,11 @@ pub const App = struct {
     pub fn confirmTool(self: *Self, name: []const u8, input: std.json.Value) agent_loop.Decision {
         if (self.tool_confirmation.cursor == .accept_all) return .approve;
 
+        const tool = std.meta.stringToEnum(agent.tools.ToolName, name);
         const needs_confirmation =
-            std.mem.eql(u8, name, "write_file") or
-            std.mem.eql(u8, name, "edit_file") or
-            std.mem.eql(u8, name, "bash") or
+            tool == .write_file or
+            tool == .edit_file or
+            tool == .bash or
             std.mem.startsWith(u8, name, "mcp__");
         if (!needs_confirmation) return .approve;
 
@@ -540,7 +542,7 @@ pub const App = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
-        const is_bash = std.mem.eql(u8, name, "bash");
+        const is_bash = tool == .bash;
         const is_mcp = std.mem.startsWith(u8, name, "mcp__");
 
         var mcp_fp: []const u8 = "";
@@ -569,7 +571,7 @@ pub const App = struct {
         const new_s = if (is_mcp) "" else (agent.tools.getStringField(input, "new_string") orelse "");
 
         var start_line: usize = 1;
-        if (std.mem.eql(u8, name, "edit_file")) {
+        if (tool == .edit_file) {
             const line_ctx = agent.tools.Context{ .sandbox = &self.sandbox };
             if (agent.tools.matchStartLine(arena_alloc, line_ctx, fp, old_s)) |ln| start_line = ln;
         }
@@ -578,6 +580,7 @@ pub const App = struct {
         self.loading.pause();
         self.tool_confirmation.pending = true;
         self.tool_confirmation.tool_name = name;
+        self.tool_confirmation.tool = tool;
         self.tool_confirmation.file_path = fp;
         self.tool_confirmation.content = cnt;
         self.tool_confirmation.old_string = old_s;
@@ -601,7 +604,8 @@ pub const App = struct {
     }
 
     pub fn onToolActivity(self: *Self, name: []const u8, input: std.json.Value) void {
-        if (std.mem.eql(u8, name, "grep")) {
+        const tool = std.meta.stringToEnum(agent.tools.ToolName, name);
+        if (tool == .grep) {
             self.mutex.lock();
             self.tool_status = name;
             self.setGrepStatus(
@@ -614,7 +618,7 @@ pub const App = struct {
             if (self.active_loop) |l| wakeLoop(l);
         }
 
-        if (std.mem.eql(u8, name, "glob")) {
+        if (tool == .glob) {
             self.mutex.lock();
             self.tool_status = name;
             self.setGlobStatus(
@@ -626,7 +630,7 @@ pub const App = struct {
             if (self.active_loop) |l| wakeLoop(l);
         }
 
-        if (std.mem.eql(u8, name, "web_search")) {
+        if (tool == .web_search) {
             const query = agent.tools.getStringField(input, "query") orelse "";
             const label = std.fmt.allocPrint(self.alloc, "Web Search(\"{s}\")", .{query}) catch "Web Search()";
             self.mutex.lock();
@@ -638,7 +642,7 @@ pub const App = struct {
             if (self.active_loop) |l| wakeLoop(l);
         }
 
-        if (std.mem.eql(u8, name, "web_extract")) {
+        if (tool == .web_extract) {
             const target = self.summarizeUrls(agent.tools.getField(input, "urls") orelse .null);
             const label = std.fmt.allocPrint(self.alloc, "Web Extract(\"{s}\")", .{target}) catch "Web Extract()";
             self.mutex.lock();
@@ -653,13 +657,14 @@ pub const App = struct {
     }
 
     pub fn onToolResult(self: *Self, name: []const u8, input: std.json.Value, result: agent.tools.ToolResult) void {
-        if (!result.is_error and std.mem.eql(u8, name, "skill")) {
+        const tool = std.meta.stringToEnum(agent.tools.ToolName, name);
+        if (!result.is_error and tool == .skill) {
             if (agent.tools.getStringField(input, "name")) |skill_name| {
                 self.appendSkillNotice(skill_name);
                 if (self.active_loop) |l| wakeLoop(l);
             }
         }
-        if (!result.is_error and std.mem.eql(u8, name, "skill_script")) {
+        if (!result.is_error and tool == .skill_script) {
             if (agent.tools.getStringField(input, "skill")) |skill_name| {
                 if (agent.tools.getStringField(input, "path")) |script_path| {
                     self.appendSkillScriptNotice(skill_name, script_path);
@@ -720,9 +725,9 @@ pub const App = struct {
         if (action == .deny) {
             var deny_buf: [256]u8 = undefined;
             const deny_target = self.tool_confirmation.file_path;
-            const action_text = if (std.mem.eql(u8, self.tool_confirmation.tool_name, "write_file"))
+            const action_text = if (self.tool_confirmation.tool == .write_file)
                 "write"
-            else if (std.mem.eql(u8, self.tool_confirmation.tool_name, "bash"))
+            else if (self.tool_confirmation.tool == .bash)
                 "run"
             else
                 "edit";

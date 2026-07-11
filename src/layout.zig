@@ -41,9 +41,9 @@ pub fn compute(screen_width: u16, screen_height: u16, app: *App, input_box_h: u1
     const chat_y: u16 = 1;
     const min_chat_h: u16 = 1;
     const show_grep_panel = app.grep_status.pattern.len > 0 or
-        (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "grep"));
+        (app.tool_confirmation.pending and app.tool_confirmation.tool == .grep);
     const show_glob_panel = app.glob_status.pattern.len > 0 or
-        (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "glob"));
+        (app.tool_confirmation.pending and app.tool_confirmation.tool == .glob);
     const show_web_panel = app.web_status.label.len > 0;
 
     const loading_h: u16 = if (app.loading.active) 1 else 0;
@@ -62,13 +62,13 @@ pub fn compute(screen_width: u16, screen_height: u16, app: *App, input_box_h: u1
     const requested_preview_h: u16 = if (is_code_confirm) 0 else if (app.tool_confirmation.pending) blk: {
         const content_lines: usize = if (std.mem.startsWith(u8, app.tool_confirmation.tool_name, "mcp__"))
             std.mem.count(u8, app.tool_confirmation.content, "\n") + 1
-        else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob"))
+        else if (app.tool_confirmation.tool == .grep or app.tool_confirmation.tool == .glob)
             3
-        else if (std.mem.eql(u8, app.tool_confirmation.tool_name, "bash"))
+        else if (app.tool_confirmation.tool == .bash)
             wrappedRows(app.tool_confirmation.file_path, screen_width -| 4)
         else
             1;
-        const is_bash_conf = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
+        const is_bash_conf = app.tool_confirmation.tool == .bash;
         const chrome: usize = if (is_bash_conf) 8 else 6;
         const cap: usize = if (is_bash_conf) 24 else 20;
         const needed: u16 = @intCast(@min(content_lines + chrome, cap));

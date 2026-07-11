@@ -674,19 +674,19 @@ pub fn renderTools(alloc: std.mem.Allocator, win: vaxis.Window, screen_w: u16, p
 
     if (code_modal.isCodeConfirmation(app)) return;
 
-    const is_write = std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
-    const is_bash = std.mem.eql(u8, app.tool_confirmation.tool_name, "bash");
+    const is_write = app.tool_confirmation.tool == .write_file;
+    const is_bash = app.tool_confirmation.tool == .bash;
     const is_mcp = std.mem.startsWith(u8, app.tool_confirmation.tool_name, "mcp__");
     const is_web_preview = if (app.tool_confirmation.pending)
-        std.mem.eql(u8, app.tool_confirmation.tool_name, "web_search") or std.mem.eql(u8, app.tool_confirmation.tool_name, "web_extract")
+        app.tool_confirmation.tool == .web_search or app.tool_confirmation.tool == .web_extract
     else
         show_web_panel;
     const is_search_preview = if (app.tool_confirmation.pending)
-        std.mem.eql(u8, app.tool_confirmation.tool_name, "grep") or std.mem.eql(u8, app.tool_confirmation.tool_name, "glob") or is_web_preview
+        app.tool_confirmation.tool == .grep or app.tool_confirmation.tool == .glob or is_web_preview
     else
         show_grep_panel or show_glob_panel or show_web_panel;
     const is_grep = if (app.tool_confirmation.pending)
-        std.mem.eql(u8, app.tool_confirmation.tool_name, "grep")
+        app.tool_confirmation.tool == .grep
     else
         show_grep_panel;
     const preview_path = if (is_web_preview) app.web_status.label else if (is_grep) app.grep_status.path else app.glob_status.path;

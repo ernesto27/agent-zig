@@ -15,25 +15,19 @@ pub const PlanMode = struct {
     }
 
     pub fn isToolAllowed(_: PlanMode, tool_name: []const u8, input: std.json.Value) mode_mod.ToolPolicy {
-        if (std.mem.eql(u8, tool_name, "read_file")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "glob")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "grep")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "web_search")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "web_extract")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "skill")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "skill_resource")) return .{ .ok = true, .reason = "" };
-        if (std.mem.eql(u8, tool_name, "task_write")) return .{ .ok = true, .reason = "" };
-
-        if (std.mem.eql(u8, tool_name, "write_file")) return .{ .ok = false, .reason = "Plan Mode blocks file writes" };
-        if (std.mem.eql(u8, tool_name, "edit_file")) return .{ .ok = false, .reason = "Plan Mode blocks file edits" };
-
-        if (std.mem.eql(u8, tool_name, "bash")) {
-            const command = agent.json_helpers.getStringField(input, "command") orelse "";
-            if (isSafeBash(command)) return .{ .ok = true, .reason = "" };
-            return .{ .ok = false, .reason = "Plan Mode allows only non-mutating shell commands" };
+        const tool = std.meta.stringToEnum(agent.tools.ToolName, tool_name) orelse
+            return .{ .ok = false, .reason = "Tool not allowed in Plan Mode" };
+        switch (tool) {
+            .read_file, .glob, .grep, .web_search, .web_extract, .skill, .skill_resource, .task_write => return .{ .ok = true, .reason = "" },
+            .write_file => return .{ .ok = false, .reason = "Plan Mode blocks file writes" },
+            .edit_file => return .{ .ok = false, .reason = "Plan Mode blocks file edits" },
+            .bash => {
+                const command = agent.json_helpers.getStringField(input, "command") orelse "";
+                if (isSafeBash(command)) return .{ .ok = true, .reason = "" };
+                return .{ .ok = false, .reason = "Plan Mode allows only non-mutating shell commands" };
+            },
+            .skill_script => return .{ .ok = false, .reason = "Tool not allowed in Plan Mode" },
         }
-
-        return .{ .ok = false, .reason = "Tool not allowed in Plan Mode" };
     }
 
     fn isSafeBash(_: []const u8) bool {

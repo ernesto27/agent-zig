@@ -32,12 +32,12 @@ const Geometry = struct {
 
 pub fn isCodeConfirmation(app: *const App) bool {
     if (!app.tool_confirmation.pending) return false;
-    const name = app.tool_confirmation.tool_name;
-    return std.mem.eql(u8, name, "write_file") or std.mem.eql(u8, name, "edit_file");
+    const tool = app.tool_confirmation.tool;
+    return tool == .write_file or tool == .edit_file;
 }
 
 fn isWrite(app: *const App) bool {
-    return std.mem.eql(u8, app.tool_confirmation.tool_name, "write_file");
+    return app.tool_confirmation.tool == .write_file;
 }
 
 pub fn contentLineCount(app: *const App) usize {

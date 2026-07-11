@@ -246,8 +246,23 @@ const skill_script_schema_json =
     \\}
 ;
 
+pub const ToolName = enum {
+    read_file,
+    write_file,
+    edit_file,
+    bash,
+    glob,
+    grep,
+    web_search,
+    web_extract,
+    skill,
+    skill_resource,
+    skill_script,
+    task_write,
+};
+
 const ToolSpec = struct {
-    name: []const u8,
+    name: ToolName,
     description: []const u8,
     schema_json: []const u8,
     required: []const []const u8,
@@ -255,73 +270,73 @@ const ToolSpec = struct {
 
 const tool_specs = [_]ToolSpec{
     .{
-        .name = "read_file",
+        .name = .read_file,
         .description = "Read the contents of a file at the given path. Returns the file content as text.",
         .schema_json = read_file_schema_json,
         .required = &.{"file_path"},
     },
     .{
-        .name = "write_file",
+        .name = .write_file,
         .description = "Write content to a file at the given path. Creates the file if it doesn't exist, overwrites if it does.",
         .schema_json = write_file_schema_json,
         .required = &.{ "file_path", "content" },
     },
     .{
-        .name = "edit_file",
+        .name = .edit_file,
         .description = "Edit a file by replacing an exact string with a new string. old_string must appear exactly once in the file.",
         .schema_json = edit_file_schema_json,
         .required = &.{ "file_path", "old_string", "new_string" },
     },
     .{
-        .name = "bash",
+        .name = .bash,
         .description = "Run a shell command and return its output. Use for file system operations, running tests, compiling code, etc.",
         .schema_json = bash_schema_json,
         .required = &.{"command"},
     },
     .{
-        .name = "glob",
+        .name = .glob,
         .description = "Find files by glob pattern. Returns matching file paths, one per line.",
         .schema_json = glob_schema_json,
         .required = &.{"pattern"},
     },
     .{
-        .name = "grep",
+        .name = .grep,
         .description = "Search file contents for a literal text pattern. Returns matching file paths, line numbers, and lines.",
         .schema_json = grep_schema_json,
         .required = &.{"pattern"},
     },
     .{
-        .name = "web_search",
+        .name = .web_search,
         .description = "Search the web and return relevant results with title, URL, and extracted snippets.",
         .schema_json = web_search_schema_json,
         .required = &.{"query"},
     },
     .{
-        .name = "web_extract",
+        .name = .web_extract,
         .description = "Extract page content from one or more URLs and return the cleaned content.",
         .schema_json = web_extract_schema_json,
         .required = &.{"urls"},
     },
     .{
-        .name = "skill",
+        .name = .skill,
         .description = "Load a reusable skill by name. Use this when a skill description matches the user's request. The result is the full SKILL.md instructions for that skill, which may reference bundled scripts or other supporting files.",
         .schema_json = skill_schema_json,
         .required = &.{"name"},
     },
     .{
-        .name = "skill_resource",
+        .name = .skill_resource,
         .description = "Read a non-script supporting file from a previously loaded skill directory. Use this only for files referenced by the skill instructions.",
         .schema_json = skill_resource_schema_json,
         .required = &.{ "skill", "path" },
     },
     .{
-        .name = "skill_script",
+        .name = .skill_script,
         .description = "Resolve the full filesystem path to a bundled skill script under scripts/. Use this before running a script referenced by a skill.",
         .schema_json = skill_script_schema_json,
         .required = &.{ "skill", "path" },
     },
     .{
-        .name = "task_write",
+        .name = .task_write,
         .description = "Create or update the task list for the current session so the user can see your plan and progress on multi-step work. Send the complete ordered list every call — it replaces the previous list. Keep exactly one task 'in_progress' while you work on it and mark it 'completed' when done. Keep each task's content short — a few words (about 5 or fewer); it renders in a narrow sidebar.",
         .schema_json = task_write_schema_json,
         .required = &.{"tasks"},
@@ -333,12 +348,12 @@ pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const messa
     try builtins.ensureTotalCapacity(allocator, tool_specs.len);
     for (tool_specs) |spec| {
         const schema = try std.json.parseFromSlice(std.json.Value, allocator, spec.schema_json, .{});
-        const description = if (std.mem.eql(u8, spec.name, "skill") and ctx.skill_registry != null) blk: {
+        const description = if (spec.name == .skill and ctx.skill_registry != null) blk: {
             const available = try ctx.skill_registry.?.buildAvailableSkillsMarkdown(allocator);
             break :blk try std.mem.concat(allocator, u8, &.{ spec.description, "\n\n", available });
         } else spec.description;
         try builtins.append(allocator, .{
-            .name = spec.name,
+            .name = @tagName(spec.name),
             .description = description,
             .input_schema = .{
                 .type = "object",
@@ -375,38 +390,29 @@ pub fn execute(allocator: std.mem.Allocator, ctx: Context, tool_name: []const u8
 
     // Filesystem tools are written once against `Exec`; pick the backend. When a
     // sandbox is active they run in the container, otherwise natively on the host.
+    const tool = std.meta.stringToEnum(ToolName, tool_name) orelse
+        return .{ .content = "Unknown tool", .is_error = true };
     const exec = execFor(ctx);
 
-    if (std.mem.eql(u8, tool_name, "read_file")) return readTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "write_file")) return writeTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "edit_file")) return editTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "bash")) return bashTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "glob")) return globTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "grep")) return grepTool(allocator, exec, input);
-    if (std.mem.eql(u8, tool_name, "web_search")) {
-        const result = web.search(allocator, input);
-        return .{ .content = result.content, .is_error = result.is_error };
-    }
-    if (std.mem.eql(u8, tool_name, "web_extract")) {
-        const result = web.extract(allocator, input);
-        return .{ .content = result.content, .is_error = result.is_error };
-    }
-    if (std.mem.eql(u8, tool_name, "skill")) {
-        return loadSkill(allocator, ctx, input);
-    }
-    if (std.mem.eql(u8, tool_name, "skill_resource")) {
-        return loadSkillResource(allocator, ctx, input);
-    }
-    if (std.mem.eql(u8, tool_name, "skill_script")) {
-        return resolveSkillScript(allocator, ctx, input);
-    }
-    if (std.mem.eql(u8, tool_name, "task_write")) {
-        return taskWriteTool(allocator, ctx, input);
-    }
-
-    return .{
-        .content = "Unknown tool",
-        .is_error = true,
+    return switch (tool) {
+        .read_file => readTool(allocator, exec, input),
+        .write_file => writeTool(allocator, exec, input),
+        .edit_file => editTool(allocator, exec, input),
+        .bash => bashTool(allocator, exec, input),
+        .glob => globTool(allocator, exec, input),
+        .grep => grepTool(allocator, exec, input),
+        .web_search => blk: {
+            const result = web.search(allocator, input);
+            break :blk .{ .content = result.content, .is_error = result.is_error };
+        },
+        .web_extract => blk: {
+            const result = web.extract(allocator, input);
+            break :blk .{ .content = result.content, .is_error = result.is_error };
+        },
+        .skill => loadSkill(allocator, ctx, input),
+        .skill_resource => loadSkillResource(allocator, ctx, input),
+        .skill_script => resolveSkillScript(allocator, ctx, input),
+        .task_write => taskWriteTool(allocator, ctx, input),
     };
 }
 

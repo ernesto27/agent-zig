@@ -455,7 +455,7 @@ pub fn main() !void {
         if (code_modal.isCodeConfirmation(&app)) {
             const max_modal_scroll = code_modal.maxScroll(vx.screen.width, vx.screen.height, &app);
             if (app.preview_scroll > max_modal_scroll) app.preview_scroll = max_modal_scroll;
-        } else if (app.tool_confirmation.pending and std.mem.eql(u8, app.tool_confirmation.tool_name, "bash")) {
+        } else if (app.tool_confirmation.pending and app.tool_confirmation.tool == .bash) {
             const visible: usize = if (layout.preview_h > 8) layout.preview_h - 8 else 1;
             const cmd_rows = layout_mod.wrappedRows(app.tool_confirmation.file_path, vx.screen.width -| 4);
             const max_scroll = if (cmd_rows > visible) cmd_rows - visible else 0;
