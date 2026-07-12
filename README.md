@@ -4,6 +4,14 @@ Terminal-based AI coding agent written in Zig, built on [libvaxis](https://githu
 
 Requires Zig `0.15.2`+.
 
+## Install
+
+Linux (x86_64) — downloads the latest release binary into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ernesto27/agent-zig/master/scripts/install.sh | bash
+```
+
 ## Features
 
 - **Multi-provider LLM** — pick any configured/authenticated model from the picker:
