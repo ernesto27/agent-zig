@@ -9,6 +9,8 @@ const log = std.log.scoped(.llm);
 
 pub const version = "2023-06-01";
 
+const default_max_output: u32 = 8192;
+
 pub fn buildRequestBody(
     allocator: std.mem.Allocator,
     model: []const u8,
@@ -26,6 +28,7 @@ pub fn buildRequestBody(
         .stream = stream,
         .tools = tools,
         .effort = effort,
+        .max_tokens = if (model_info) |mi| mi.model.max_output else default_max_output,
         .supports_thinking = model_info != null and model_info.?.model.supports_thinking,
     };
     return std.json.Stringify.valueAlloc(allocator, req_body, .{});

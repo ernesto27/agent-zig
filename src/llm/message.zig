@@ -38,7 +38,7 @@ pub const MessagesRequest = struct {
     model: []const u8,
     messages: []const Message,
     system: ?[]const u8 = null,
-    max_tokens: u32 = 8096,
+    max_tokens: u32,
     stream: bool = false,
     tools: []const ToolDefinition = &.{},
     effort: config.Effort = .none,

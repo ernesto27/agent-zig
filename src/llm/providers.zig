@@ -3,12 +3,17 @@ const json_helpers = @import("../json_helpers.zig");
 
 const log = std.log.scoped(.providers);
 
+/// Conservative output-token ceiling for models that don't advertise their own
+/// `max_completion_tokens`. Output is always a fraction of the context window.
+const output_cap: u64 = 32_768;
+
 pub const Model = struct {
     id: []const u8,
     display: []const u8,
     free: bool = false,
     supports_thinking: bool = false,
     max_context: u32 = 200_000,
+    max_output: u32,
 };
 
 pub const FindResult = struct {
@@ -25,36 +30,36 @@ pub const providers = [_]Provider{
     .{
         .name = "Anthropic",
         .models = &[_]Model{
-            .{ .id = "claude-opus-4-6", .display = "Claude Opus 4.6", .supports_thinking = true },
-            .{ .id = "claude-sonnet-4-6", .display = "Claude Sonnet 4.6", .supports_thinking = true },
-            .{ .id = "claude-haiku-4-5-20251001", .display = "Claude Haiku 4.5" },
+            .{ .id = "claude-opus-4-6", .display = "Claude Opus 4.6", .supports_thinking = true, .max_output = 128_000 },
+            .{ .id = "claude-sonnet-4-6", .display = "Claude Sonnet 4.6", .supports_thinking = true, .max_output = 128_000 },
+            .{ .id = "claude-haiku-4-5-20251001", .display = "Claude Haiku 4.5", .max_output = 64_000 },
         },
     },
     .{
         .name = "OpenAI",
         .models = &[_]Model{
-            .{ .id = "gpt-5.5", .display = "GPT-5.5", .supports_thinking = true, .max_context = 1_050_000 },
-            .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true, .max_context = 272_000 },
-            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true, .max_context = 272_000 },
-            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true, .max_context = 128_000 },
-            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano", .supports_thinking = true, .max_context = 128_000 },
-            .{ .id = "gpt-5", .display = "GPT-5", .supports_thinking = true, .max_context = 128_000 },
-            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true, .max_context = 128_000 },
+            .{ .id = "gpt-5.5", .display = "GPT-5.5", .supports_thinking = true, .max_context = 1_050_000, .max_output = 128_000 },
+            .{ .id = "gpt-5.4", .display = "GPT-5.4", .supports_thinking = true, .max_context = 272_000, .max_output = 128_000 },
+            .{ .id = "gpt-5.4-pro", .display = "GPT-5.4 Pro", .supports_thinking = true, .max_context = 272_000, .max_output = 128_000 },
+            .{ .id = "gpt-5.4-mini", .display = "GPT-5.4 Mini", .supports_thinking = true, .max_context = 128_000, .max_output = 64_000 },
+            .{ .id = "gpt-5.4-nano", .display = "GPT-5.4 Nano", .supports_thinking = true, .max_context = 128_000, .max_output = 64_000 },
+            .{ .id = "gpt-5", .display = "GPT-5", .supports_thinking = true, .max_context = 128_000, .max_output = 64_000 },
+            .{ .id = "gpt-5-mini", .display = "GPT-5 Mini", .supports_thinking = true, .max_context = 128_000, .max_output = 64_000 },
         },
     },
     .{
         .name = "DeepSeek",
         .models = &[_]Model{
-            .{ .id = "deepseek-v4-flash", .display = "DeepSeek V4 Flash", .supports_thinking = true, .max_context = 1_000_000 },
-            .{ .id = "deepseek-v4-pro", .display = "DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_000_000 },
+            .{ .id = "deepseek-v4-flash", .display = "DeepSeek V4 Flash", .supports_thinking = true, .max_context = 1_000_000, .max_output = 64_000 },
+            .{ .id = "deepseek-v4-pro", .display = "DeepSeek V4 Pro", .supports_thinking = true, .max_context = 1_000_000, .max_output = 64_000 },
         },
     },
     .{
         .name = "Gemini",
         .models = &[_]Model{
-            .{ .id = "gemini-2.5-pro", .display = "Gemini 2.5 Pro", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "gemini-2.5-flash", .display = "Gemini 2.5 Flash", .supports_thinking = true, .max_context = 1_048_576 },
-            .{ .id = "gemini-2.5-flash-lite", .display = "Gemini 2.5 Flash Lite", .max_context = 1_048_576 },
+            .{ .id = "gemini-2.5-pro", .display = "Gemini 2.5 Pro", .supports_thinking = true, .max_context = 1_048_576, .max_output = 65_536 },
+            .{ .id = "gemini-2.5-flash", .display = "Gemini 2.5 Flash", .supports_thinking = true, .max_context = 1_048_576, .max_output = 65_536 },
+            .{ .id = "gemini-2.5-flash-lite", .display = "Gemini 2.5 Flash Lite", .max_context = 1_048_576, .max_output = 65_536 },
         },
     },
 };
@@ -185,6 +190,17 @@ pub const OpenRouterStore = struct {
             const ctx_len: u64 = if (raw_ctx == 0) 200_000 else raw_ctx;
             const max_ctx: u32 = if (ctx_len > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(ctx_len);
 
+            // When the endpoint omits an explicit output cap, don't assume the
+            // full context window (output is always a fraction of it): clamp to
+            // a conservative ceiling.
+            const out_fallback: u64 = @min(ctx_len, output_cap);
+            const raw_out: u64 = if (json_helpers.getObjectField(item, "top_provider")) |tp|
+                json_helpers.getU64Field(tp, "max_completion_tokens") orelse out_fallback
+            else
+                out_fallback;
+            const out_len: u64 = if (raw_out == 0) out_fallback else raw_out;
+            const max_out: u32 = if (out_len > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(out_len);
+
             var is_free = false;
             if (json_helpers.getObjectField(item, "pricing")) |pricing| {
                 const prompt = json_helpers.getStringField(pricing, "prompt") orelse "";
@@ -198,6 +214,7 @@ pub const OpenRouterStore = struct {
                 .free = is_free,
                 .supports_thinking = has_reasoning,
                 .max_context = max_ctx,
+                .max_output = max_out,
             });
         }
 

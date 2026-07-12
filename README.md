@@ -18,12 +18,14 @@ Requires Zig `0.15.2`+.
   - `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`
   - `web_search`, `web_extract` (Tavily — requires build-time API key)
   - `skill`, `skill_resource`, `skill_script`
+  - `task_write` — maintains the session task list rendered in the task sidebar
 - **Modes** — `build` (all tools), `plan` (read-only), and `shell`:
   - **Shift+Tab** toggles build ↔ plan
   - Type a leading `!` to run a line directly as a shell command; **Esc** exits shell mode
 - **Docker sandbox** (`/sandbox`) — runs tool actions inside a throwaway container against a fresh git worktree/branch, so the main checkout is never mutated (see below)
 - **MCP support** — stdio and Streamable HTTP transports; multi-server; tools exposed as `mcp__<server>__<tool>` behind the same confirmation gate (see below)
-- **Skills** — load custom agent skills from `.agents/skills/` (project) and `~/.agents/skills/` (home); enable/disable with `/skills`; invoke directly from the command picker; queued when the LLM is busy
+- **Skills** — load custom agent skills from `.agents/skills/` (project) and `~/.agents/skills/` (home); enable/disable with `/skills`; invoke directly from the command picker; queued when the LLM is busy; preload specific skills at launch with `-skills-load <name> [<name>...]`
+- **Task sidebar** — the agent tracks multi-step work via the `task_write` tool; pending/in-progress/completed tasks render live in a sidebar
 - **Slash commands** — `/provider`, `/model`, `/clear`, `/compact`, `/fork`, `/resume`, `/init`, `/mcp`, `/skills`, `/rename`, `/sandbox`, `/export`, `/settings`, `/logout`, `/exit`
 - **@ file picker** — fuzzy-pick files to attach inline to a message
 - **Image attachments** — attach images; persisted with the session
