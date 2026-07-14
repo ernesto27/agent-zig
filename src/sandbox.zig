@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const tasks = @import("tasks.zig");
 
 const log = std.log.scoped(.sandbox);
 
@@ -110,6 +111,43 @@ pub const Sandbox = struct {
         self.workdir = "/workspace";
     }
 
+    /// Commit the current worktree state on the sandbox branch. Runs on the HOST
+    /// (the container image may lack git) against `worktree_path`. Container
+    /// writes are root-owned, so hand the files back to the host user first, the
+    /// same way `stop` does. Commit identity is inherited from the repo's git
+    /// config. Returns true iff a commit was actually created (false when
+    /// inactive, nothing staged, or a git step failed — failures are logged).
+    pub fn commit(self: *const Self, alloc: std.mem.Allocator, message: []const u8) bool {
+        if (!self.active.load(.acquire)) return false;
+
+        // Hand root-owned container writes back to the host user so host-side git
+        // can read the files and write objects/index as us.
+        if (std.fmt.allocPrint(alloc, "{d}:{d}", .{ std.os.linux.getuid(), std.os.linux.getgid() })) |owner| {
+            defer alloc.free(owner);
+            runQuiet(alloc, &.{ "docker", "exec", self.name, "chown", "-R", owner, self.workdir });
+        } else |err| {
+            log.warn("sandbox commit: could not format chown owner: {}", .{err});
+        }
+
+        checked(alloc, &.{ "git", "-C", self.worktree_path, "add", "-A" }, error.GitAddFailed) catch |err| {
+            log.err("sandbox commit: git add failed: {}", .{err});
+            return false;
+        };
+
+        // Nothing staged? `git diff --cached --quiet` exits 0 when clean.
+        if (indexClean(alloc, self.worktree_path)) {
+            log.info("sandbox commit: nothing to commit on {s}", .{self.branch});
+            return false;
+        }
+
+        checked(alloc, &.{ "git", "-C", self.worktree_path, "commit", "-m", message }, error.GitCommitFailed) catch |err| {
+            log.err("sandbox commit: git commit failed: {}", .{err});
+            return false;
+        };
+        log.info("sandbox commit: committed on {s}: {s}", .{ self.branch, message });
+        return true;
+    }
+
     /// Map a tool-supplied path to one relative to /workspace: strip the host
     /// repo root (the tool schemas tell the model to use absolute paths) plus any
     /// leading "./" or "/". Returns a sub-slice of `path` (no allocation).
@@ -208,6 +246,35 @@ fn oom() Result {
     return .{ .content = "Out of memory", .is_error = true };
 }
 
+/// Build a sandbox commit subject from a task list: "sandbox: a; b; c". Caller
+/// owns the returned slice. Null on OOM (logged). Read `task_items` with the
+/// caller's task lock held (App guards `tasks` with a mutex).
+pub fn buildCommitMessage(alloc: std.mem.Allocator, task_items: []const tasks.Task) ?[]const u8 {
+    var buf = std.ArrayList(u8){};
+    // defer (not errdefer): this returns ?[]const u8, so a `return null` is not an
+    // error return and errdefer would never fire. On success toOwnedSlice empties
+    // the list, making this deinit a no-op.
+    defer buf.deinit(alloc);
+    buf.appendSlice(alloc, "sandbox: ") catch |err| {
+        log.warn("sandbox commit: message alloc failed: {}", .{err});
+        return null;
+    };
+    for (task_items, 0..) |t, i| {
+        if (i != 0) buf.appendSlice(alloc, "; ") catch |err| {
+            log.warn("sandbox commit: message alloc failed: {}", .{err});
+            return null;
+        };
+        buf.appendSlice(alloc, t.content) catch |err| {
+            log.warn("sandbox commit: message alloc failed: {}", .{err});
+            return null;
+        };
+    }
+    return buf.toOwnedSlice(alloc) catch |err| {
+        log.warn("sandbox commit: message alloc failed: {}", .{err});
+        return null;
+    };
+}
+
 /// Run a docker command and return `e` if it exits non-zero.
 fn checked(alloc: std.mem.Allocator, argv: []const []const u8, e: anyerror) !void {
     const r = try std.process.Child.run(.{ .allocator = alloc, .argv = argv, .max_output_bytes = 64 * 1024 });
@@ -228,4 +295,23 @@ fn runQuiet(alloc: std.mem.Allocator, argv: []const []const u8) void {
     const r = std.process.Child.run(.{ .allocator = alloc, .argv = argv, .max_output_bytes = 16 * 1024 }) catch return;
     alloc.free(r.stdout);
     alloc.free(r.stderr);
+}
+
+/// True when the worktree index has nothing staged (git diff --cached --quiet
+/// exits 0). On error, treat as not clean so a commit is still attempted.
+fn indexClean(alloc: std.mem.Allocator, wt: []const u8) bool {
+    const r = std.process.Child.run(.{
+        .allocator = alloc,
+        .argv = &.{ "git", "-C", wt, "diff", "--cached", "--quiet" },
+        .max_output_bytes = 4 * 1024,
+    }) catch |err| {
+        log.warn("sandbox commit: diff --cached failed: {}", .{err});
+        return false;
+    };
+    defer alloc.free(r.stdout);
+    defer alloc.free(r.stderr);
+    return switch (r.term) {
+        .Exited => |c| c == 0,
+        else => false,
+    };
 }

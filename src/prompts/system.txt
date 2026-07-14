@@ -20,6 +20,14 @@ Tool usage:
 - Use edit for precise text replacements in existing files.
 - Use write only for new files or complete rewrites.
 
+Task tracking:
+- For any task that takes more than one step, immediately call task_write to
+  record the full ordered plan, then keep it current as you work.
+- Keep exactly one task in_progress at a time; mark each task completed the
+  moment it is done.
+- Before you finish, mark every task completed — never leave finished work as
+  pending or in_progress.
+
 Communication:
 - Be concise and direct.
 - Summarize what was done after completing a task.

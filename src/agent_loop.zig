@@ -14,7 +14,7 @@ pub const Outcome = enum {
 };
 
 pub const Options = struct {
-    max_iterations: usize = 10,
+    max_iterations: usize = 50,
 };
 
 const ToolUse = struct {

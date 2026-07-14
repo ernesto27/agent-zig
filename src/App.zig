@@ -112,6 +112,10 @@ pub const App = struct {
     // → atomic (no mutex; the worker also does blocking docker calls we must not
     // hold a lock across).
     sandbox_busy: std.atomic.Value(bool) = .init(false),
+    // Latch: true once the current all-completed task list has been committed to
+    // the sandbox branch. Reset whenever the list is no longer all-complete so
+    // each plan cycle commits exactly once. Guarded by `mutex` (like `tasks`).
+    tasks_committed: bool = false,
     // Handle for the background start/stop worker. Kept (not detached) so deinit
     // can join it — a slow image pull/worktree create must not outlive the app
     // and touch freed state. Mirrors `mcp_load_thread`.
@@ -191,6 +195,7 @@ pub const App = struct {
         defer self.mutex.unlock();
         self.messages.resumeSession(alloc, &self.sessions, filename);
         self.tasks.clear();
+        self.tasks_committed = false;
         self.needs_redraw = true;
     }
 
@@ -199,6 +204,7 @@ pub const App = struct {
         defer self.mutex.unlock();
         self.messages.clear(self.alloc);
         self.tasks.clear();
+        self.tasks_committed = false;
     }
 
     pub fn initCMD(self: *Self) !void {
@@ -289,6 +295,19 @@ pub const App = struct {
     /// a background thread to keep the TUI responsive.
     pub fn toggleSandbox(self: *Self, loop: *EventLoop, is_off: bool) void {
         if (self.sandbox_busy.load(.acquire)) return;
+
+        // Refuse to start/stop the sandbox while a request is in flight. The
+        // agent thread's onFinished may be committing and using the sandbox's
+        // name/branch/worktree_path; stopping here would free them under it. The
+        // commit path keeps loading.active true until it's done (see onFinished),
+        // so this check fully covers that window.
+        self.mutex.lock();
+        const request_in_flight = self.loading.active;
+        self.mutex.unlock();
+        if (request_in_flight) {
+            self.appendNotice("🐳 finish or cancel (Esc) the current request before toggling the sandbox");
+            return;
+        }
 
         // Reap the previous (now-finished) worker so its handle can be reused.
         // Safe: sandbox_busy is false here, so it isn't running.
@@ -539,14 +558,56 @@ pub const App = struct {
 
     pub fn onFinished(self: *Self, _: agent_loop.Outcome) void {
         self.mutex.lock();
-        self.loading.stop();
         self.tool_status = null;
         self.clearGrepStatus();
         self.clearGlobStatus();
         self.clearWebStatus();
         self.cancel_requested = false;
         self.needs_redraw = true;
+
+        // Snapshot whether the sandbox should commit now (task list just became
+        // all-completed) while we hold the lock that guards `self.tasks`.
+        var commit_msg: ?[]const u8 = null;
+        if (self.sandbox.active.load(.acquire)) {
+            if (self.tasks.allCompleted()) {
+                // Latch is set only after commit() actually succeeds (below), so a
+                // failed commit or a null message is retried on the next turn.
+                if (!self.tasks_committed)
+                    commit_msg = agent.sandbox.buildCommitMessage(self.alloc, self.tasks.items.items);
+            } else {
+                self.tasks_committed = false; // re-arm for the next plan cycle
+            }
+        }
         self.mutex.unlock();
+
+        // Do the git work outside the lock — it shells out and can block.
+        // loading.active is still true here, so toggleSandbox refuses to stop the
+        // sandbox and can't free name/branch/worktree_path under us.
+        // `appendNotice` re-takes the lock itself.
+        if (commit_msg) |msg| {
+            defer self.alloc.free(msg);
+            if (self.sandbox.commit(self.alloc, msg)) {
+                // Only now that a commit actually landed do we latch, so a
+                // transient failure retries next turn. (The "nothing staged" case
+                // returns false and just re-checks harmlessly on later turns.)
+                self.mutex.lock();
+                self.tasks_committed = true;
+                self.mutex.unlock();
+                const note = std.fmt.allocPrint(self.alloc, "🐳 committed on {s}: {s}", .{ self.sandbox.branch, msg }) catch null;
+                if (note) |n| {
+                    defer self.alloc.free(n);
+                    self.appendNotice(n);
+                } else self.appendNotice("🐳 committed sandbox changes");
+            }
+        }
+
+        // Clear loading only after the commit, so the in-flight guard above holds
+        // for the whole commit window.
+        self.mutex.lock();
+        self.loading.stop();
+        self.needs_redraw = true;
+        self.mutex.unlock();
+
         if (self.active_loop) |l| wakeLoop(l);
     }
 
@@ -560,6 +621,15 @@ pub const App = struct {
         if (self.tool_confirmation.cursor == .accept_all) return .approve;
 
         const tool = std.meta.stringToEnum(agent.tools.ToolName, name);
+
+        // In sandbox mode, file edits AND bash run only inside the throwaway
+        // container worktree (via docker exec), never the real checkout — so
+        // auto-approve them and let the agent work without accept/deny prompts.
+        // MCP tools can reach outside the container, so they still confirm.
+        if (self.sandbox.active.load(.acquire) and
+            (tool == .write_file or tool == .edit_file or tool == .bash))
+            return .approve;
+
         const needs_confirmation =
             tool == .write_file or
             tool == .edit_file or
