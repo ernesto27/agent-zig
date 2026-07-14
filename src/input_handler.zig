@@ -255,7 +255,23 @@ fn spawnLlmRequest(ctx: *InputContext) !void {
 
 const SlashResult = enum { none, send, quit };
 
-fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction) !SlashResult {
+const ParsedSlash = struct { command: command_picker_mod.Command, args: []const u8 };
+
+/// Split a raw "/name arg1 arg2" line into a known command + trimmed args.
+/// Returns null unless it starts with '/' AND resolves to a real command,
+/// so unknown "/foo ..." lines still fall through and get sent as chat.
+/// NOTE: `args` is a slice INTO the input buffer — dupe it before clearing input.
+fn parseSlashCommand(input: []const u8) ?ParsedSlash {
+    if (input.len == 0 or input[0] != '/') return null;
+    const line = input[1..]; // drop the leading '/'
+    const sp = std.mem.indexOfScalar(u8, line, ' ');
+    const name = if (sp) |i| line[0..i] else line;
+    const args = if (sp) |i| std.mem.trim(u8, line[i + 1 ..], " \t") else "";
+    const cmd = command_picker_mod.findByName(name) orelse return null;
+    return .{ .command = cmd, .args = args };
+}
+
+fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction, args: ?[]const u8) !SlashResult {
     clearInput(ctx);
     switch (action) {
         .provider => try ctx.provider_picker.open(ctx.alloc),
@@ -282,7 +298,9 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction)
         .skills => try ctx.skills_picker.open(ctx.alloc, &ctx.app.skill_registry),
         .sandbox => {
             if (ctx.app.loading.active) return .none;
-            ctx.app.toggleSandbox(ctx.loop);
+            log.info("/sandbox args=\"{s}\" (active={})", .{ args orelse "", ctx.app.sandbox.active.load(.acquire) });
+            const arg_off = std.mem.eql(u8, args orelse "", "off");
+            ctx.app.toggleSandbox(ctx.loop, arg_off);
             return .none;
         },
         .export_session => {
@@ -528,7 +546,7 @@ pub fn handleEnter(ctx: *InputContext) !bool {
         var result: SlashResult = .none;
         if (ctx.command_picker.selectedCommand()) |cmd| {
             if (cmd.action) |action| {
-                result = try runSlashCommand(ctx, action);
+                result = try runSlashCommand(ctx, action, null);
             } else {
                 const bare_name = if (std.mem.startsWith(u8, cmd.name, command_picker_mod.SKILL_PREFIX))
                     cmd.name[command_picker_mod.SKILL_PREFIX.len..]
@@ -636,6 +654,24 @@ pub fn handleEnter(ctx: *InputContext) !bool {
     } else if ((ctx.input.items.len > 0 or ctx.app.pending_attachments.items.len > 0 or ctx.at_picker.picked_files.items.len > 0)) {
         const raw_input = ctx.input.items;
 
+        // A typed "/name args" line (the picker deactivates once a space is
+        // present). Dispatch it as a slash command instead of sending it to the
+        // LLM. Shell mode is exempt: there a leading "/" is an absolute path.
+        if (std.meta.activeTag(ctx.app.mode) != .shell) {
+            if (parseSlashCommand(raw_input)) |parsed| {
+                if (parsed.command.action) |action| {
+                    // args slices into the input buffer, which runSlashCommand
+                    // clears first thing — dupe it so the handler keeps a valid view.
+                    const args = try alloc.dupe(u8, parsed.args);
+                    defer alloc.free(args);
+                    const result = try runSlashCommand(ctx, action, if (args.len > 0) args else null);
+                    if (result == .quit) return true;
+                    if (result == .send and !ctx.app.loading.active) try spawnLlmRequest(ctx);
+                    return false;
+                }
+            }
+        }
+
         if (ctx.app.loading.active) {
             try ctx.app.message_queue.enqueue(alloc, raw_input);
             ctx.draft.clearRetainingCapacity();
@@ -679,7 +715,7 @@ pub fn handleEnter(ctx: *InputContext) !bool {
             else => {
                 // Don't run tools on the host while the sandbox is still
                 // starting up — wait until it's active so they route inside it.
-                if (ctx.app.sandbox_busy) {
+                if (ctx.app.sandbox_busy.load(.acquire)) {
                     ctx.app.appendNotice("🐳 sandbox is still starting — wait for \"sandbox ON\", then press Enter again");
                     return false;
                 }

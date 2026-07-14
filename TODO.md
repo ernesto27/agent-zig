@@ -18,8 +18,7 @@
 [x] - improve copy text, now is slow
 [x] - prevent crash invalid key in config.json
 [x] - test in windows
-[] - show line number in code preview
-[] - when show code changes,  only show new code, not change place of code /home/ernesto/Pictures/Screenshots/Screenshot from 2026-06-24 19-29-09.png
+[x] - show line number in code preview
 [] - show token input send to service in KB
 [] - send message with only attachments (empty input + attached files)
 [x] - add prompt queue
@@ -38,13 +37,12 @@
 [] - command to copy to clipboar current session
 [x] - only accept attach of images
 [x] - show skill command as skills:nameskill
-[] - when run skill,  execute
 [x] - export data to html
 [] - share session using gist
 [x] - rename session
 [x] - show nice date created in session
 [x] - add a system prompt
-[] - option to replace systemp prompt
+[x] - option to replace systemp prompt
 [] - add reload
 [] - when change session i want to update usage of context
 [] - context use KB does not work in deep seek
@@ -73,7 +71,6 @@
 [x] - add plan mode
 [] - when command to execute is big, overflow with questions /home/ernesto/Pictures/Screenshots/Screenshot from 2026-04-17 21-20-36.png
 [] - fix model descriptcion space ,  
-[] - do not show this err.httprequestfailes, show a nice error message
 [] - when do some change or edit, explain what ihi
 hs doing
 [x] - command show,  is overlap with content text
@@ -110,6 +107,7 @@ polish / harder:
 ## Sandbox (Docker)
 
 [x] - /sandbox command: run tool actions in a Docker container on a git worktree branch
+[x] - sandbox off option to get out 
 [] - commit worktree changes on the branch when the task finishes (auto-commit in container, e.g. on /sandbox off), so results land as a real commit instead of just uncommitted working-tree changes
 [] - show a diff/summary of what changed when the sandbox stops
 [] - configurable commit message (default: task summary) for the finish-task commit

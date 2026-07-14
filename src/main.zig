@@ -443,7 +443,7 @@ pub fn main() !void {
         else
             cwd;
         var sandbox_header_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
-        const header = if (app.sandbox.active)
+        const header = if (app.sandbox.active.load(.acquire))
             std.fmt.bufPrint(&sandbox_header_buf, "{s}  🐳 sandbox", .{base_header}) catch base_header
         else
             base_header;

@@ -16,7 +16,10 @@ pub const Result = struct {
 /// checkout is never exposed. The container is created with `--rm`, so stopping it
 /// auto-removes it; the worktree (and its branch) is kept for review/merge.
 pub const Sandbox = struct {
-    active: bool = false,
+    /// Read from the render/tool threads while a start/stop worker writes it, so
+    /// it must be atomic (see stop()/start()); the App-level `sandbox_busy` flag
+    /// keeps tool threads out while a worker runs.
+    active: std.atomic.Value(bool) = .init(false),
     /// Container name; also the `docker exec` target. Owned by `alloc`.
     name: []const u8 = "",
     /// Absolute host repo root, used to remap absolute paths to /workspace.
@@ -78,7 +81,7 @@ pub const Sandbox = struct {
         self.host_root = root;
         self.worktree_path = wt;
         self.branch = branch;
-        self.active = true;
+        self.active.store(true, .release);
         log.info("sandbox up: {s} ({s}) wt={s} branch={s}", .{ name, image, wt, branch });
     }
 
@@ -86,17 +89,25 @@ pub const Sandbox = struct {
     /// container runs as root, so first hand the worktree files back to the host
     /// user. With `--rm`, `docker stop` also removes the container. Best-effort.
     pub fn stop(self: *Self, alloc: std.mem.Allocator) void {
-        if (!self.active) return;
+        if (!self.active.load(.acquire)) return;
         if (std.fmt.allocPrint(alloc, "{d}:{d}", .{ std.os.linux.getuid(), std.os.linux.getgid() })) |owner| {
             runQuiet(alloc, &.{ "docker", "exec", self.name, "chown", "-R", owner, self.workdir });
             alloc.free(owner);
         } else |_| {}
         runQuiet(alloc, &.{ "docker", "stop", self.name });
+        // Publish "inactive" before invalidating the slices it referred to, then
+        // reset fields individually — a whole-struct `self.* = .{}` would rewrite
+        // the atomic non-atomically, racing the render thread's active load.
+        self.active.store(false, .release);
         alloc.free(self.name);
         alloc.free(self.host_root);
         alloc.free(self.worktree_path);
         alloc.free(self.branch);
-        self.* = .{};
+        self.name = "";
+        self.host_root = "";
+        self.worktree_path = "";
+        self.branch = "";
+        self.workdir = "/workspace";
     }
 
     /// Map a tool-supplied path to one relative to /workspace: strip the host

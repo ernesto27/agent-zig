@@ -108,7 +108,10 @@ pub const App = struct {
     mode: Mode = .{ .build = .{} },
     tasks: agent.tasks.TaskStore,
     sandbox: agent.sandbox.Sandbox = .{},
-    sandbox_busy: bool = false,
+    // Written by the start/stop worker, read by the event loop and input handler
+    // → atomic (no mutex; the worker also does blocking docker calls we must not
+    // hold a lock across).
+    sandbox_busy: std.atomic.Value(bool) = .init(false),
     // Handle for the background start/stop worker. Kept (not detached) so deinit
     // can join it — a slow image pull/worktree create must not outlive the app
     // and touch freed state. Mirrors `mcp_load_thread`.
@@ -284,8 +287,8 @@ pub const App = struct {
     /// Starting creates the worktree, then launches the container with it
     /// bind-mounted (the image pull on first run can be slow), so the work runs on
     /// a background thread to keep the TUI responsive.
-    pub fn toggleSandbox(self: *Self, loop: *EventLoop) void {
-        if (self.sandbox_busy) return;
+    pub fn toggleSandbox(self: *Self, loop: *EventLoop, is_off: bool) void {
+        if (self.sandbox_busy.load(.acquire)) return;
 
         // Reap the previous (now-finished) worker so its handle can be reused.
         // Safe: sandbox_busy is false here, so it isn't running.
@@ -294,9 +297,27 @@ pub const App = struct {
             self.sandbox_thread = null;
         }
 
+        if (is_off) {
+            if (!self.sandbox.active.load(.acquire)) {
+                self.appendNotice("🐳 sandbox is not running");
+                return;
+            }
+            self.sandbox_busy.store(true, .release);
+            self.appendNotice("🐳 stopping sandbox…");
+            // Stop on a worker thread: docker stop/chown block, and doing them on
+            // the event-loop thread freezes the TUI until the container dies.
+            self.sandbox_thread = std.Thread.spawn(.{}, stopSandboxWork, .{ self, loop }) catch |err| {
+                log.warn("sandbox stop thread spawn failed, running inline: {}", .{err});
+                self.sandbox_thread = null;
+                self.stopSandboxWork(loop); // spawn failed — run inline as a fallback
+                return;
+            };
+            return;
+        }
+
         // Already running → just say so; the sandbox stays up for the rest of the
         // session (it's torn down on exit in deinit).
-        if (self.sandbox.active) {
+        if (self.sandbox.active.load(.acquire)) {
             const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox already running on branch {s} at {s}", .{ self.sandbox.branch, self.sandbox.worktree_path }) catch null;
             if (msg) |m| {
                 defer self.alloc.free(m);
@@ -305,11 +326,12 @@ pub const App = struct {
             return;
         }
 
-        self.sandbox_busy = true;
+        self.sandbox_busy.store(true, .release);
         self.appendNotice("🐳 starting sandbox (first run may pull the image)…");
 
         // Keep the handle (don't detach) so deinit can join it.
-        self.sandbox_thread = std.Thread.spawn(.{}, sandboxWork, .{ self, loop }) catch {
+        self.sandbox_thread = std.Thread.spawn(.{}, sandboxWork, .{ self, loop }) catch |err| {
+            log.warn("sandbox start thread spawn failed, running inline: {}", .{err});
             // Spawn failed — fall back to running inline (blocks, but works).
             self.sandbox_thread = null;
             self.sandboxWork(loop);
@@ -317,10 +339,20 @@ pub const App = struct {
         };
     }
 
+    /// Background worker: stop the sandbox, post the result, redraw.
+    fn stopSandboxWork(self: *Self, loop: *EventLoop) void {
+        defer {
+            self.sandbox_busy.store(false, .release);
+            wakeLoop(loop);
+        }
+        self.sandbox.stop(self.alloc);
+        self.appendNotice("🐳 sandbox OFF (worktree kept for review)");
+    }
+
     /// Background worker: start the sandbox, post the result, redraw.
     fn sandboxWork(self: *Self, loop: *EventLoop) void {
         defer {
-            self.sandbox_busy = false;
+            self.sandbox_busy.store(false, .release);
             wakeLoop(loop);
         }
 

@@ -34,6 +34,15 @@ pub const commands = [_]Command{
     .{ .name = "logout", .description = "Remove provider authenticacion", .action = .logout },
 };
 
+/// Exact (case-sensitive) lookup of a built-in command by its `name`.
+/// Used to dispatch "/name args..." lines where the picker is inactive.
+pub fn findByName(name: []const u8) ?Command {
+    for (commands) |command| {
+        if (std.mem.eql(u8, command.name, name)) return command;
+    }
+    return null;
+}
+
 pub const CommandPicker = struct {
     active: bool = false,
     query: std.ArrayList(u8) = .{},

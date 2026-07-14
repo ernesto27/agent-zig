@@ -375,7 +375,7 @@ pub fn getDefinitions(allocator: std.mem.Allocator, ctx: Context) ![]const messa
 }
 
 fn execFor(ctx: Context) Exec {
-    if (ctx.sandbox) |sb| return if (sb.active) .{ .sandbox = sb } else .host;
+    if (ctx.sandbox) |sb| return if (sb.active.load(.acquire)) .{ .sandbox = sb } else .host;
     return .host;
 }
 
