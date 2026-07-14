@@ -308,6 +308,39 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction,
             try ctx.app.exportCMD();
             return .none;
         },
+        .copy_session => {
+            if (ctx.app.loading.active) return .none;
+
+            const msgs = ctx.app.messages.view();
+            var count: usize = 0;
+            for (msgs) |m| {
+                if (m.role != .notice) count += 1;
+            }
+            if (count == 0) {
+                ctx.app.appendNotice("nothing to copy");
+                return .none;
+            }
+
+            var buf = std.ArrayList(u8).init(ctx.alloc);
+            defer buf.deinit(ctx.alloc);
+
+            for (msgs) |m| {
+                if (m.role == .notice) continue;
+                const role = if (m.role == .user) "User" else "Assistant";
+                try buf.writer().print("{s}: {s}\n\n", .{ role, m.content });
+            }
+
+            const text = try buf.toOwnedSlice();
+            defer ctx.alloc.free(text);
+            ctx.loop.vaxis.copyToSystemClipboard(ctx.loop.tty.writer(), text, ctx.alloc) catch {
+                ctx.app.appendNotice("copy failed");
+                return .none;
+            };
+
+            const notice = try std.fmt.allocPrint(ctx.alloc, "📋 session copied ({d} messages)", .{count});
+            ctx.app.appendNotice(notice);
+            return .none;
+        },
         .settings => ctx.app.settings.open(),
         .exit => return .quit,
         .logout => ctx.logout_picker.open(ctx.config.cfg.providers.authenticated()),
