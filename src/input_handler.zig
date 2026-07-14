@@ -321,16 +321,16 @@ fn runSlashCommand(ctx: *InputContext, action: command_picker_mod.CommandAction,
                 return .none;
             }
 
-            var buf = std.ArrayList(u8).init(ctx.alloc);
+            var buf: std.ArrayList(u8) = .{};
             defer buf.deinit(ctx.alloc);
 
             for (msgs) |m| {
                 if (m.role == .notice) continue;
                 const role = if (m.role == .user) "User" else "Assistant";
-                try buf.writer().print("{s}: {s}\n\n", .{ role, m.content });
+                try buf.writer(ctx.alloc).print("{s}: {s}\n\n", .{ role, m.content });
             }
 
-            const text = try buf.toOwnedSlice();
+            const text = try buf.toOwnedSlice(ctx.alloc);
             defer ctx.alloc.free(text);
             ctx.loop.vaxis.copyToSystemClipboard(ctx.loop.tty.writer(), text, ctx.alloc) catch {
                 ctx.app.appendNotice("copy failed");
