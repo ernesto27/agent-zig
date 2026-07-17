@@ -79,7 +79,7 @@ pub const App = struct {
     message_queue: agent.message_queue.MessageQueue = .{},
     llm_client: *agent.llm.Client,
     // Borrowed; owned by main(). Live handle to persisted config + settings,
-    // so reads (e.g. dockerImage, settings) reflect runtime mutations.
+    // so reads (e.g. providers, settings) reflect runtime mutations.
     config_store: *agent.config.ConfigStore,
     pending_attachments: std.ArrayList([]u8),
     skill_registry: agent.skills.Registry,
@@ -381,7 +381,7 @@ pub const App = struct {
         };
         defer self.alloc.free(cwd);
 
-        self.sandbox.start(self.alloc, self.config_store.cfg.dockerImage, cwd) catch |err| {
+        self.sandbox.start(self.alloc, cwd) catch |err| {
             const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox failed to start: {s} (is Docker installed and running?)", .{@errorName(err)}) catch {
                 self.appendNotice("🐳 sandbox failed to start");
                 return;

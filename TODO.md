@@ -108,7 +108,9 @@ polish / harder:
 
 [x] - /sandbox command: run tool actions in a Docker container on a git worktree branch
 [x] - sandbox off option to get out 
-[] - commit worktree changes on the branch when the task finishes (auto-commit in container, e.g. on /sandbox off), so results land as a real commit instead of just uncommitted working-tree changes
+[x] - set a specific docker image
+[x] - commit worktree changes on the branch when the task finishes (auto-commit in container, e.g. on /sandbox off), so results land as a real commit instead of just uncommitted working-tree changes
+[] - show in TUI image used
 [] - show a diff/summary of what changed when the sandbox stops
 [] - configurable commit message (default: task summary) for the finish-task commit
 [] - merge-back helper: command to merge the sandbox branch into the current branch

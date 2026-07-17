@@ -129,7 +129,6 @@ pub const Config = struct {
     sessions: []const SessionEntry = &.{},
     trustedFolders: []const TrustedFolder = &.{},
     mcpServers: McpServers = .{},
-    dockerImage: []const u8 = "ubuntu:24.04",
     settings: settings.Settings = .{},
 };
 
@@ -229,7 +228,7 @@ pub const ConfigStore = struct {
     /// For a `[]const u8` field the `value` may be any slice that coerces to it
     /// (`[]u8`, `[:0]const u8`, a literal) — `dupe` handles the coercion.
     /// `field` is a pointer to the target field, e.g.:
-    ///   try store.set(&store.cfg.dockerImage, "node:20");            // duped
+    ///   try store.set(&store.cfg.providers.selected, "Anthropic");   // duped
     ///   try store.set(&store.cfg.settings.showThinking.status, true); // by value
     pub fn set(self: *ConfigStore, field: anytype, value: anytype) !void {
         const Field = @typeInfo(@TypeOf(field)).pointer.child;

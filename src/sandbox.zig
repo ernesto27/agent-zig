@@ -4,10 +4,50 @@ const tasks = @import("tasks.zig");
 
 const log = std.log.scoped(.sandbox);
 
+/// Default container image when no per-project override is set.
+const default_image = "ubuntu:24.04";
+
 pub const Result = struct {
     content: []const u8,
     is_error: bool = false,
 };
+
+/// Resolve the container image for the sandbox: the `dockerImage` from an
+/// `agent-zig.json` in the current working directory when present, otherwise
+/// `default_image`. Best-effort — a missing, unreadable, or invalid file falls
+/// back to the default (logged). Caller owns the returned slice.
+fn resolveImage(alloc: std.mem.Allocator) ![]const u8 {
+    const file = std.fs.cwd().openFile("agent-zig.json", .{}) catch |err| switch (err) {
+        error.FileNotFound => return alloc.dupe(u8, default_image),
+        else => {
+            log.warn("could not open agent-zig.json: {s}", .{@errorName(err)});
+            return alloc.dupe(u8, default_image);
+        },
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(alloc, 1024 * 1024) catch |err| {
+        log.warn("could not read agent-zig.json: {s}", .{@errorName(err)});
+        return alloc.dupe(u8, default_image);
+    };
+    defer alloc.free(content);
+
+    const LocalConfig = struct { dockerImage: []const u8 = "" };
+    const parsed = std.json.parseFromSlice(LocalConfig, alloc, content, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch |err| {
+        log.warn("ignoring invalid agent-zig.json: {s}", .{@errorName(err)});
+        return alloc.dupe(u8, default_image);
+    };
+    defer parsed.deinit();
+
+    if (parsed.value.dockerImage.len > 0) {
+        log.info("dockerImage override from agent-zig.json: {s}", .{parsed.value.dockerImage});
+        return alloc.dupe(u8, parsed.value.dockerImage);
+    }
+    return alloc.dupe(u8, default_image);
+}
 
 /// A Docker container bound to a per-run git worktree (a new branch under
 /// ~/.config/agent-zig/worktrees) bind-mounted at /workspace.
@@ -34,10 +74,14 @@ pub const Sandbox = struct {
 
     const Self = @This();
 
-    /// Launch a detached, auto-removing container off `image` and copy the
-    /// contents of `repo_path` into /workspace (no bind mount → host untouched).
-    /// Sets `active = true` on success; on error nothing is left running.
-    pub fn start(self: *Self, alloc: std.mem.Allocator, image: []const u8, repo_path: []const u8) !void {
+    /// Launch a detached, auto-removing container and copy the contents of
+    /// `repo_path` into /workspace (no bind mount → host untouched). The image is
+    /// resolved from agent-zig.json in the cwd, else `default_image`. Sets
+    /// `active = true` on success; on error nothing is left running.
+    pub fn start(self: *Self, alloc: std.mem.Allocator, repo_path: []const u8) !void {
+        const image = try resolveImage(alloc);
+        defer alloc.free(image);
+
         const home = utils.homeDir(alloc) catch return error.NoHomeEnv;
         defer alloc.free(home);
         const repo = std.fs.path.basename(repo_path);

@@ -865,11 +865,6 @@ pub fn renderStatus(
             .text = " ",
             .style = .{ .fg = palette.light },
         }, .{ .row_offset = status_row, .col_offset = res.col });
-    } else {
-        res = win.printSegment(.{
-            .text = if (app.loading.active) " THINKING " else " READY ",
-            .style = .{ .fg = palette.light },
-        }, .{ .row_offset = status_row, .col_offset = res.col });
     }
 
     if (clipboard_status) |status| {
