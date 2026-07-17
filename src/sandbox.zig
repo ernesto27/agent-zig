@@ -63,6 +63,8 @@ pub const Sandbox = struct {
     active: std.atomic.Value(bool) = .init(false),
     /// Container name; also the `docker exec` target. Owned by `alloc`.
     name: []const u8 = "",
+    /// Docker image used for this sandbox (e.g. "ubuntu:24.04"). Owned by `alloc`.
+    image: []const u8 = "",
     /// Absolute host repo root, used to remap absolute paths to /workspace.
     /// Owned by `alloc`.
     host_root: []const u8 = "",
@@ -80,7 +82,6 @@ pub const Sandbox = struct {
     /// `active = true` on success; on error nothing is left running.
     pub fn start(self: *Self, alloc: std.mem.Allocator, repo_path: []const u8) !void {
         const image = try resolveImage(alloc);
-        defer alloc.free(image);
 
         const home = utils.homeDir(alloc) catch return error.NoHomeEnv;
         defer alloc.free(home);
@@ -123,6 +124,7 @@ pub const Sandbox = struct {
         errdefer alloc.free(root);
 
         self.name = name;
+        self.image = image;
         self.host_root = root;
         self.worktree_path = wt;
         self.branch = branch;
@@ -145,10 +147,12 @@ pub const Sandbox = struct {
         // the atomic non-atomically, racing the render thread's active load.
         self.active.store(false, .release);
         alloc.free(self.name);
+        alloc.free(self.image);
         alloc.free(self.host_root);
         alloc.free(self.worktree_path);
         alloc.free(self.branch);
         self.name = "";
+        self.image = "";
         self.host_root = "";
         self.worktree_path = "";
         self.branch = "";

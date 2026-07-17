@@ -337,7 +337,7 @@ pub const App = struct {
         // Already running → just say so; the sandbox stays up for the rest of the
         // session (it's torn down on exit in deinit).
         if (self.sandbox.active.load(.acquire)) {
-            const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox already running on branch {s} at {s}", .{ self.sandbox.branch, self.sandbox.worktree_path }) catch null;
+            const msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox already running ({s}) on branch {s} at {s}", .{ self.sandbox.image, self.sandbox.branch, self.sandbox.worktree_path }) catch null;
             if (msg) |m| {
                 defer self.alloc.free(m);
                 self.appendNotice(m);
@@ -390,7 +390,7 @@ pub const App = struct {
             self.appendNotice(msg);
             return;
         };
-        const on_msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox ON — branch {s} at {s} (main repo untouched)", .{ self.sandbox.branch, self.sandbox.worktree_path }) catch null;
+        const on_msg = std.fmt.allocPrint(self.alloc, "🐳 sandbox ON image:{s} - branch {s} at {s}", .{ self.sandbox.image, self.sandbox.branch, self.sandbox.worktree_path }) catch null;
         if (on_msg) |m| {
             defer self.alloc.free(m);
             self.appendNotice(m);
